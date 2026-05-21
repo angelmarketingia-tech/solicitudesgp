@@ -1,350 +1,300 @@
+/*
+ * GanaPlay Diseño — Sistema visual corporativo
+ * Manual de marca GanaPlay: verde protagonista, blanco para respiración,
+ * grises de soporte. Tema claro, premium y profesional.
+ *
+ * Tipografía: el manual indica "Stage Grotesk" para títulos. Esa fuente no
+ * está disponible como webfont libre, por lo que se usa "Outfit" (geométrica,
+ * profesional) como fallback documentado para títulos y texto.
+ */
 @import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&display=swap');
 
 :root {
-  --bg-color: #050a06;
-  --panel-bg: rgba(10, 20, 15, 0.7);
-  --border-color: rgba(34, 197, 94, 0.15);
-  --text-primary: #f0fdf4;
-  --text-secondary: #86efac;
-  --accent-color: #22c55e;
-  --accent-glow: rgba(34, 197, 94, 0.6);
-  --danger: #ef4444;
-  --warning: #f59e0b;
-  --success: #22c55e;
-  --button-text: #050a06;
-}
+  /* ── Paleta oficial GanaPlay ── */
+  --gp-green: #00783e;       /* Verde principal */
+  --gp-green-dark: #034419;  /* Verde oscuro */
+  --gp-white: #ffffff;       /* Blanco */
+  --gp-gray-dark: #6d6e71;   /* Gris oscuro */
+  --gp-gray-light: #a7a9ac;  /* Gris claro */
+  --gp-gray-deep: #333333;   /* Gris profundo */
 
-body {
-  margin: 0;
-  font-family: 'Outfit', sans-serif;
-  background-color: var(--bg-color);
-  color: var(--text-primary);
-  background-image: 
-    radial-gradient(circle at 10% 10%, rgba(34, 197, 94, 0.15) 0%, transparent 40%),
-    radial-gradient(circle at 90% 90%, rgba(16, 185, 129, 0.1) 0%, transparent 40%);
-  background-attachment: fixed;
-  min-height: 100vh;
+  /* ── Tokens semánticos (tema claro) ── */
+  --bg-color: #f3f5f4;            /* Fondo de la app: gris muy claro */
+  --panel-bg: #ffffff;            /* Tarjetas y paneles */
+  --surface-1: #f5f7f6;           /* Superficie interior suave */
+  --surface-2: #eef1ef;           /* Superficie interior un poco más marcada */
+  --border-color: #e2e6e3;        /* Borde estándar */
+  --border-subtle: rgba(51, 51, 51, 0.07); /* Borde/divisor muy sutil */
+
+  --text-primary: #333333;        /* Texto principal */
+  --text-secondary: #6d6e71;      /* Texto secundario */
+  --text-muted: #a7a9ac;          /* Texto terciario / placeholders */
+
+  --accent-color: #00783e;        /* Acento principal */
+  --accent-dark: #034419;         /* Acento oscuro (hover) */
+  --accent-soft: #e6f2ec;         /* Fondo verde muy claro */
+  --accent-glow: rgba(0, 120, 62, 0.22);
+  --button-text: #ffffff;         /* Texto sobre botón verde */
+
+  --danger: #d92d20;
+  --danger-soft: #fdecea;
+  --warning: #b54708;
+  --warning-soft: #fdf3e7;
+  --success: #00783e;
+  --success-soft: #e6f2ec;
+  --info: #0b6bcb;
+  --info-soft: #e8f1fc;
+
+  --shadow-sm: 0 1px 3px rgba(51, 51, 51, 0.08);
+  --shadow-md: 0 6px 20px -6px rgba(51, 51, 51, 0.16);
+  --shadow-lg: 0 18px 48px -16px rgba(51, 51, 51, 0.28);
+  --radius: 16px;
 }
 
 * {
   box-sizing: border-box;
 }
 
-.glass-panel {
-  background: var(--panel-bg);
-  backdrop-filter: blur(25px);
-  -webkit-backdrop-filter: blur(25px);
-  border: 1px solid var(--border-color);
-  border-radius: 24px;
-  box-shadow: 0 15px 50px -15px rgba(0,0,0,0.7), inset 0 0 0 1px rgba(255,255,255,0.02);
+html, body {
+  margin: 0;
+  padding: 0;
 }
 
+body {
+  font-family: 'Outfit', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  background-color: var(--bg-color);
+  color: var(--text-primary);
+  min-height: 100vh;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ── Paneles ── */
+.glass-panel {
+  background: var(--panel-bg);
+  border: 1px solid var(--border-color);
+  border-radius: 24px;
+  box-shadow: var(--shadow-md);
+}
+
+.card {
+  background: var(--panel-bg);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-sm);
+}
+
+/* ── Botones ── */
 .btn {
-  background: linear-gradient(135deg, #22c55e, #10b981);
+  background: var(--accent-color);
   color: var(--button-text);
   border: none;
   border-radius: 12px;
-  padding: 14px 28px;
+  padding: 12px 22px;
   font-weight: 700;
   cursor: pointer;
-  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  transition: background 0.2s ease, box-shadow 0.2s ease, transform 0.1s ease;
   font-family: inherit;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 10px;
-  letter-spacing: 0.5px;
-  text-transform: uppercase;
+  gap: 8px;
+  letter-spacing: 0.2px;
   font-size: 14px;
 }
 
 .btn:hover:not(:disabled) {
-  box-shadow: 0 0 25px var(--accent-glow), 0 5px 15px rgba(0,0,0,0.3);
-  transform: translateY(-3px);
-  background: linear-gradient(135deg, #16a34a, #059669);
+  background: var(--accent-dark);
+  box-shadow: 0 6px 18px var(--accent-glow);
+}
+
+.btn:active:not(:disabled) {
+  transform: translateY(1px);
 }
 
 .btn:disabled {
   opacity: 0.5;
   cursor: not-allowed;
-  filter: grayscale(1);
 }
 
 .btn-secondary {
-  background: rgba(34, 197, 94, 0.05);
+  background: var(--accent-soft);
   color: var(--accent-color);
-  border: 1px solid rgba(34, 197, 94, 0.3);
+  border: 1px solid var(--border-color);
 }
 
 .btn-secondary:hover:not(:disabled) {
-  background: rgba(34, 197, 94, 0.15);
-  box-shadow: 0 0 15px rgba(34, 197, 94, 0.2);
+  background: #d8ebe1;
+  box-shadow: none;
 }
 
+.btn-ghost {
+  background: transparent;
+  color: var(--text-secondary);
+  border: 1px solid var(--border-color);
+}
+
+.btn-ghost:hover:not(:disabled) {
+  background: var(--surface-1);
+  color: var(--text-primary);
+  box-shadow: none;
+}
+
+.btn-danger {
+  background: var(--danger-soft);
+  color: var(--danger);
+  border: 1px solid #f5c6c2;
+}
+
+.btn-danger:hover:not(:disabled) {
+  background: #fbdcd9;
+  box-shadow: none;
+}
+
+/* ── Formularios ── */
 input, select, textarea {
   width: 100%;
-  padding: 16px;
-  background: rgba(0, 0, 0, 0.5);
-  border: 1px solid rgba(34, 197, 94, 0.2);
-  border-radius: 14px;
+  padding: 12px 14px;
+  background: var(--gp-white);
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
   color: var(--text-primary);
   font-family: inherit;
-  font-size: 15px;
-  transition: all 0.3s ease;
-  box-shadow: inset 0 2px 5px rgba(0,0,0,0.2);
+  font-size: 14px;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+input::placeholder, textarea::placeholder {
+  color: var(--text-muted);
 }
 
 input:focus, select:focus, textarea:focus {
   outline: none;
   border-color: var(--accent-color);
-  box-shadow: 0 0 0 3px rgba(34, 197, 94, 0.25), inset 0 2px 5px rgba(0,0,0,0.2);
-  background: rgba(0, 0, 0, 0.8);
+  box-shadow: 0 0 0 3px var(--accent-glow);
 }
 
-input[type="date"]::-webkit-calendar-picker-indicator {
-  filter: invert(1) sepia(100%) hue-rotate(90deg) saturate(500%);
-  cursor: pointer;
+input[type="checkbox"], input[type="radio"] {
+  width: auto;
+  accent-color: var(--accent-color);
 }
 
 .label {
   display: block;
-  font-size: 13px;
+  font-size: 12px;
   text-transform: uppercase;
-  letter-spacing: 1.2px;
+  letter-spacing: 0.8px;
   color: var(--text-secondary);
-  margin-bottom: 10px;
+  margin-bottom: 8px;
   font-weight: 700;
 }
 
-.file-upload {
-  border: 2px dashed rgba(34, 197, 94, 0.3);
-  border-radius: 20px;
-  padding: 45px 25px;
-  text-align: center;
-  cursor: pointer;
-  transition: all 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
-  background: rgba(0,0,0,0.3);
-  position: relative;
-  overflow: hidden;
-}
-
-.file-upload::before {
-  content: '';
-  position: absolute;
-  top: 0; left: 0; right: 0; bottom: 0;
-  background: radial-gradient(circle at center, rgba(34, 197, 94, 0.1) 0%, transparent 70%);
-  opacity: 0;
-  transition: opacity 0.3s ease;
-}
-
-.file-upload:hover::before {
-  opacity: 1;
-}
-
-.file-upload:hover {
-  border-color: var(--accent-color);
-  transform: scale(1.03);
-  box-shadow: 0 10px 30px rgba(34, 197, 94, 0.15);
-}
-
-.color-red { color: var(--danger); font-weight: bold; }
-.color-yellow { color: var(--warning); font-weight: bold; }
-.color-green { color: var(--success); font-weight: bold; }
-
-.bg-red { background: linear-gradient(145deg, rgba(239,68,68,0.15), rgba(0,0,0,0.5)); border: 1px solid rgba(239,68,68,0.4); box-shadow: 0 8px 32px rgba(239,68,68,0.1); }
-.bg-yellow { background: linear-gradient(145deg, rgba(245,158,11,0.15), rgba(0,0,0,0.5)); border: 1px solid rgba(245,158,11,0.4); box-shadow: 0 8px 32px rgba(245,158,11,0.1); }
-.bg-green { background: linear-gradient(145deg, rgba(34,197,94,0.15), rgba(0,0,0,0.5)); border: 1px solid rgba(34,197,94,0.4); box-shadow: 0 8px 32px rgba(34,197,94,0.1); }
-
-.app-container {
-  max-width: 1500px;
-  margin: 0 auto;
-  padding: 50px 30px;
-  display: grid;
-  grid-template-columns: 420px 1fr;
-  gap: 50px;
-}
-
-.header {
-  grid-column: 1 / -1;
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 30px;
-  padding-bottom: 25px;
-  border-bottom: 1px solid rgba(255,255,255,0.05);
-}
-
-.header-brand {
-  display: flex;
-  align-items: center;
-  gap: 20px;
-}
-
-.header-brand img {
-  height: 48px;
-  object-fit: contain;
-}
-
-.request-card {
-  padding: 32px;
-  margin-bottom: 30px;
-  transition: all 0.4s ease;
-  position: relative;
-  overflow: hidden;
-}
-
-.request-card:hover {
-  transform: translateY(-5px);
-  box-shadow: 0 20px 40px -10px rgba(0,0,0,0.8), 0 0 20px rgba(34,197,94,0.1);
-}
-
-.request-card::before {
-  content: '';
-  position: absolute;
-  top: 0; left: 0; right: 0; height: 5px;
-  background: linear-gradient(90deg, #10b981, #22c55e, #84cc16);
-}
-
 .form-group {
-  margin-bottom: 24px;
+  margin-bottom: 20px;
 }
 
+/* ── Badges / pills ── */
 .badge {
   display: inline-flex;
-  padding: 8px 16px;
+  align-items: center;
+  padding: 4px 12px;
   border-radius: 20px;
-  font-size: 13px;
-  font-weight: 800;
-  text-transform: uppercase;
-  letter-spacing: 1px;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.3px;
 }
 
-.badge-pending {
-  background: rgba(245, 158, 11, 0.15);
-  color: #fbbf24;
-  border: 1px solid rgba(245, 158, 11, 0.3);
-}
+.badge-pending  { background: var(--warning-soft); color: var(--warning); }
+.badge-completed { background: var(--success-soft); color: var(--success); }
+.badge-red    { background: var(--danger-soft);  color: var(--danger);  border: 1px solid #f5c6c2; }
+.badge-yellow { background: var(--warning-soft); color: var(--warning); border: 1px solid #f3dcb8; }
+.badge-green  { background: var(--success-soft); color: var(--success); border: 1px solid #bfe0ce; }
 
-.badge-completed {
-  background: rgba(34, 197, 94, 0.15);
-  color: #4ade80;
-  border: 1px solid rgba(34, 197, 94, 0.3);
-}
-
-.grid-cards {
-  display: flex;
-  flex-direction: column;
-  gap: 28px;
-}
-
-.req-meta {
-  display: flex;
-  gap: 24px;
-  margin-bottom: 20px;
-  font-size: 15px;
-  color: var(--text-secondary);
-}
-
-.req-meta strong {
-  color: var(--text-primary);
-}
-
-.creative-img {
-  width: 100%;
-  max-width: 450px;
-  height: auto;
-  border-radius: 16px;
-  margin-top: 10px;
-  border: 2px solid rgba(34, 197, 94, 0.2);
-  box-shadow: 0 10px 30px rgba(0,0,0,0.5);
-}
-
-.ai-evaluation {
-  margin-top: 24px;
-  padding: 24px;
-  border-radius: 20px;
-  position: relative;
-  overflow: hidden;
-}
-
-.ai-evaluation::after {
-  content: '';
-  position: absolute;
-  top: -50px; right: -50px;
-  width: 150px; height: 150px;
-  background: radial-gradient(circle, rgba(255,255,255,0.1) 0%, transparent 70%);
-  border-radius: 50%;
-}
-
-.rating-score {
-  font-size: 64px;
-  font-weight: 800;
-  line-height: 1;
-  margin-bottom: 8px;
-  font-family: 'Outfit', sans-serif;
-  letter-spacing: -2px;
-}
-
-.score-1-4 { color: var(--danger); text-shadow: 0 0 30px rgba(239,68,68,0.5); }
-.score-5-7 { color: var(--warning); text-shadow: 0 0 30px rgba(245,158,11,0.5); }
-.score-8-10 { color: var(--success); text-shadow: 0 0 30px rgba(34,197,94,0.5); }
-
+/* ── Estado de carga ── */
 .loader {
-  width: 32px;
-  height: 32px;
-  border: 4px solid rgba(34, 197, 94, 0.2);
+  width: 28px;
+  height: 28px;
+  border: 3px solid var(--accent-soft);
   border-radius: 50%;
   border-top-color: var(--accent-color);
-  animation: spin 1s cubic-bezier(0.5, 0.1, 0.4, 0.9) infinite;
+  animation: spin 0.9s linear infinite;
 }
 
 @keyframes spin {
   to { transform: rotate(360deg); }
 }
 
-@media (max-width: 1024px) {
-  .app-container {
-    grid-template-columns: 1fr;
-  }
-}
-
-/* ── Login blob animation ── */
-@keyframes pulse-slow {
-  0%, 100% { transform: scale(1) translate(0,0); opacity: 0.6; }
-  33%       { transform: scale(1.08) translate(2%,2%); opacity: 1; }
-  66%       { transform: scale(0.95) translate(-1%,1%); opacity: 0.7; }
-}
-
-/* ── Floating micro-animation for logo icon ── */
-@keyframes float {
-  0%, 100% { transform: translateY(0px); }
-  50%       { transform: translateY(-6px); }
-}
-
-/* ── Loading overlay ── */
 .loading-overlay {
   position: fixed;
   inset: 0;
-  background: rgba(5,10,6,0.85);
-  backdrop-filter: blur(8px);
+  background: rgba(243, 245, 244, 0.82);
+  backdrop-filter: blur(4px);
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 16px;
+  gap: 14px;
   z-index: 999;
   font-size: 14px;
   color: var(--text-secondary);
   font-weight: 600;
-  letter-spacing: 0.5px;
 }
 
-/* ── AI evaluation badge colors ── */
-.badge-red    { background: rgba(239,68,68,0.15);  color: #f87171; border: 1px solid rgba(239,68,68,0.4); }
-.badge-yellow { background: rgba(245,158,11,0.15); color: #fbbf24; border: 1px solid rgba(245,158,11,0.4); }
-.badge-green  { background: rgba(34,197,94,0.15);  color: #4ade80; border: 1px solid rgba(34,197,94,0.4); }
+/* ── Skeleton (carga de listas) ── */
+.skeleton {
+  background: linear-gradient(90deg, var(--surface-2) 25%, var(--surface-1) 37%, var(--surface-2) 63%);
+  background-size: 400% 100%;
+  animation: skeleton 1.4s ease infinite;
+  border-radius: 10px;
+}
 
-/* ── Format pill badges ── */
+@keyframes skeleton {
+  0% { background-position: 100% 50%; }
+  100% { background-position: 0 50%; }
+}
+
+/* ── Animaciones suaves ── */
+@keyframes float {
+  0%, 100% { transform: translateY(0px); }
+  50%      { transform: translateY(-6px); }
+}
+
+@keyframes toast-in {
+  from { opacity: 0; transform: translateY(12px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* ── Layout legacy ── */
+.app-container {
+  max-width: 1500px;
+  margin: 0 auto;
+  padding: 32px 24px;
+}
+
+.header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 24px;
+  padding-bottom: 18px;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.header-brand {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.request-card {
+  transition: box-shadow 0.2s ease, transform 0.12s ease;
+}
+
+.request-card:hover {
+  box-shadow: var(--shadow-md);
+  transform: translateY(-2px);
+}
+
+/* ── Formato pills ── */
 .fmt-pill {
   display: inline-flex;
   align-items: center;
@@ -354,15 +304,22 @@ input[type="date"]::-webkit-calendar-picker-indicator {
   font-size: 10px;
   font-weight: 700;
   text-transform: uppercase;
-  letter-spacing: 0.8px;
+  letter-spacing: 0.6px;
+  background: var(--surface-2);
+  color: var(--text-secondary);
 }
-.fmt-static  { background: rgba(96,165,250,0.15);  color: #60a5fa; border: 1px solid rgba(96,165,250,0.3); }
-.fmt-post    { background: rgba(244,114,182,0.15); color: #f472b6; border: 1px solid rgba(244,114,182,0.3); }
-.fmt-video   { background: rgba(251,191,36,0.15);  color: #fbbf24; border: 1px solid rgba(251,191,36,0.3); }
-.fmt-gif     { background: rgba(167,139,250,0.15); color: #a78bfa; border: 1px solid rgba(167,139,250,0.3); }
 
-/* ── Scrollbar style ── */
-::-webkit-scrollbar { width: 5px; height: 5px; }
-::-webkit-scrollbar-track { background: rgba(0,0,0,0.2); }
-::-webkit-scrollbar-thumb { background: rgba(34,197,94,0.3); border-radius: 10px; }
-::-webkit-scrollbar-thumb:hover { background: rgba(34,197,94,0.5); }
+/* ── Scrollbar ── */
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--gp-gray-light); border-radius: 10px; }
+::-webkit-scrollbar-thumb:hover { background: var(--gp-gray-dark); }
+
+input[type="date"]::-webkit-calendar-picker-indicator {
+  cursor: pointer;
+  opacity: 0.6;
+}
+
+@media (max-width: 1024px) {
+  .app-container { padding: 20px 14px; }
+}
