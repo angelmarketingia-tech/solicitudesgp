@@ -666,7 +666,14 @@ export default function GanaPlayMainApp() {
       }
       return updatedReq;
     } catch (err: unknown) {
-      addToast(`Error al subir "${file.name}": ` + (err instanceof Error ? err.message : ""), 'error');
+      const code = (err && typeof err === 'object' && 'code' in err) ? String((err as { code: string }).code) : '';
+      let msg = err instanceof Error ? err.message : 'error desconocido';
+      if (code === 'storage/unknown' || code === 'storage/unauthorized' ||
+          code === 'storage/retry-limit-exceeded' || code === 'storage/quota-exceeded') {
+        msg = 'el almacenamiento de archivos (Firebase Storage) no está disponible. ' +
+              'El administrador debe activarlo en la consola de Firebase.';
+      }
+      addToast(`No se pudo subir "${file.name}": ${msg}`, 'error');
       return null;
     }
   }, [userName, addToast, createNotification, sendEmailAlert, analyzeCreativeInBackground]);

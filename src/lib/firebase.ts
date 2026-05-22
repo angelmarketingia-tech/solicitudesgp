@@ -14,5 +14,10 @@ const firebaseConfig = {
 const app = initializeApp(firebaseConfig);
 export const db = getFirestore(app);
 // Pasar el bucket explícitamente con gs:// para evitar "No default bucket found"
-const bucketUrl = `gs://${process.env.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET || 'ganaplay-73120.firebasestorage.app'}`;
+const bucketUrl = `gs://${process.env.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET || 'respaldogp-a2578.firebasestorage.app'}`;
 export const storage = getStorage(app, bucketUrl);
+// Reintentos cortos: si Storage no responde (p.ej. no está activado en la
+// consola de Firebase), la subida falla rápido con un error claro en vez
+// de quedarse "girando" durante minutos.
+storage.maxUploadRetryTime = 20000;
+storage.maxOperationRetryTime = 20000;
