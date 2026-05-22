@@ -563,61 +563,79 @@ export default function GanaPlayMainApp() {
     }
   };
 
-  const handleDesignerUpload = async (e: ChangeEvent<HTMLInputElement>, type: string) => {
-    const file = e.target.files?.[0];
-    if (!file || !selectedReq) return;
+  // Evaluación IA de una pieza, en segundo plano: NO bloquea la subida.
+  const analyzeCreativeInBackground = useCallback(async (
+    reqId: string,
+    type: string,
+    file: File,
+    ctx: { copy: string; format: string; countries: string[] },
+    creativesAfterUpload: Creative[],
+  ) => {
+    try {
+      const reader = new FileReader();
+      const base64data = await new Promise<string>((resolve, reject) => {
+        reader.onloadend = () => resolve(reader.result as string);
+        reader.onerror = reject;
+        reader.readAsDataURL(file);
+      });
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), 30000);
+      const res = await fetch("/api/analyze", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          imageBase64: base64data,
+          copy: ctx.copy,
+          format: ctx.format,
+          country: ctx.countries.join(", "),
+          dimensions: type,
+        }),
+        signal: ctrl.signal,
+      });
+      clearTimeout(timer);
+      const resData = await res.json();
+      if (!res.ok || !resData.rating) return;
+      const merged = creativesAfterUpload.map(c =>
+        c.type === type ? { ...c, aiEvaluation: resData as AIEvaluation } : c);
+      await updateDoc(doc(db, "requests", reqId), { creatives: merged });
+      setSelectedReq(prev => (prev && prev.id === reqId) ? { ...prev, creatives: merged } : prev);
+    } catch {
+      /* La evaluación IA es opcional: si falla, la pieza ya quedó guardada. */
+    }
+  }, []);
+
+  // Sube un archivo entregable. Devuelve la solicitud actualizada (o null si falla).
+  // La IA y el correo NO bloquean: corren después.
+  const uploadDeliverableFile = useCallback(async (
+    file: File,
+    reqSnapshot: RequestType,
+  ): Promise<RequestType | null> => {
     const allowed = ['jpg', 'jpeg', 'png', 'webp', 'pdf', 'zip'];
     const ext = (file.name.split('.').pop() || '').toLowerCase();
     if (!allowed.includes(ext)) {
-      addToast(`Formato no permitido. Usa: ${allowed.join(', ')}.`, 'error');
-      return;
+      addToast(`"${file.name}": formato no permitido (usa ${allowed.join(', ')}).`, 'error');
+      return null;
     }
     if (file.size > 25 * 1024 * 1024) {
-      addToast("El archivo supera el límite de 25 MB.", 'error');
-      return;
+      addToast(`"${file.name}" supera el límite de 25 MB.`, 'error');
+      return null;
     }
     const isImage = ['jpg', 'jpeg', 'png', 'webp'].includes(ext);
-    const reqSnapshot = selectedReq;
-    setLoading(true);
+    const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_');
+    const type = file.name;
     try {
-      const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_');
-      const storageRef = ref(storage, `creatives/${reqSnapshot.id}/${type.replace(/\s/g, '_')}_${Date.now()}_${safeName}`);
-      // Subida simple (uploadBytes): estable y sin requisitos extra de CORS
-      // en el bucket. La subida reanudable bloqueaba en algunos navegadores.
-      const snapshot = await uploadBytes(storageRef, file);
+      const storageRef = ref(storage, `creatives/${reqSnapshot.id}/${Date.now()}_${safeName}`);
+      // Timeout de seguridad: si la subida tarda demasiado, error claro (no congela).
+      const snapshot = await Promise.race([
+        uploadBytes(storageRef, file),
+        new Promise<never>((_, reject) => setTimeout(
+          () => reject(new Error("La subida tardó demasiado. Revisa tu conexión a internet.")), 90000)),
+      ]);
       const downloadURL = await getDownloadURL(snapshot.ref);
 
-      // Evaluación IA opcional (solo imágenes) — si falla, la pieza se guarda igual.
-      let aiEvaluation: AIEvaluation | undefined = undefined;
-      if (isImage) {
-        try {
-          const reader = new FileReader();
-          const base64data = await new Promise<string>((resolve, reject) => {
-            reader.onloadend = () => resolve(reader.result as string);
-            reader.onerror = reject;
-            reader.readAsDataURL(file);
-          });
-          const res = await fetch("/api/analyze", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              imageBase64: base64data,
-              copy: reqSnapshot.copy,
-              format: reqSnapshot.format,
-              country: reqSnapshot.countries.join(", "),
-              dimensions: type,
-            }),
-          });
-          const resData = await res.json();
-          if (res.ok && resData.rating) aiEvaluation = resData;
-        } catch {
-          addToast("Pieza guardada. Evaluación IA no disponible.", 'info');
-        }
-      }
-
-      const newCreative: Creative = { url: downloadURL, type, ...(aiEvaluation ? { aiEvaluation } : {}) };
+      const newCreative: Creative = { url: downloadURL, type };
       const newCreativesList = [...reqSnapshot.creatives.filter(c => c.type !== type), newCreative];
-      const entry: HistoryEntry = { action: `Pieza "${type}" entregada (${safeName})`, by: userName, at: new Date().toISOString() };
+      const entry: HistoryEntry = { action: `Entregable subido: ${safeName}`, by: userName, at: new Date().toISOString() };
       const newHistory = [...(reqSnapshot.history || []), entry];
 
       await updateDoc(doc(db, "requests", reqSnapshot.id), {
@@ -626,14 +644,11 @@ export default function GanaPlayMainApp() {
         history: newHistory,
         updatedAt: serverTimestamp(),
       });
+      const updatedReq: RequestType = { ...reqSnapshot, status: "En Proceso", creatives: newCreativesList, history: newHistory };
+      setSelectedReq(prev => (prev && prev.id === reqSnapshot.id) ? updatedReq : prev);
 
-      setSelectedReq(prev => prev && prev.id === reqSnapshot.id
-        ? { ...prev, status: "En Proceso", creatives: newCreativesList, history: newHistory }
-        : prev);
-      addToast(`Pieza "${type}" subida correctamente.`, 'success');
-      await createNotification('creative_uploaded', '🎨 Pieza entregada', `${reqSnapshot.id}: "${type}" subido por ${userName}`, 'admin', reqSnapshot.id);
-
-      // Regla de alertas: al entregar, siempre se avisa al solicitante.
+      // Las siguientes acciones NO bloquean la subida (sin await):
+      createNotification('creative_uploaded', '🎨 Entregable subido', `${reqSnapshot.id}: "${safeName}" por ${userName}`, 'admin', reqSnapshot.id);
       if (reqSnapshot.requesterEmail) {
         sendEmailAlert({
           type: "delivery",
@@ -644,11 +659,32 @@ export default function GanaPlayMainApp() {
           requesterName: reqSnapshot.requesterName || "",
           deliveryDate: reqSnapshot.deliveryDate || "",
         });
-      } else {
-        addToast("Pieza entregada. Sin correo del solicitante para notificar.", 'info');
       }
+      if (isImage) {
+        void analyzeCreativeInBackground(reqSnapshot.id, type, file,
+          { copy: reqSnapshot.copy, format: reqSnapshot.format, countries: reqSnapshot.countries }, newCreativesList);
+      }
+      return updatedReq;
     } catch (err: unknown) {
-      addToast("Error al subir la pieza: " + (err instanceof Error ? err.message : ""), 'error');
+      addToast(`Error al subir "${file.name}": ` + (err instanceof Error ? err.message : ""), 'error');
+      return null;
+    }
+  }, [userName, addToast, createNotification, sendEmailAlert, analyzeCreativeInBackground]);
+
+  // Subida de uno o varios entregables a la vez.
+  const handleDeliverablesUpload = async (e: ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files || []);
+    e.target.value = "";
+    if (files.length === 0 || !selectedReq) return;
+    let working: RequestType = selectedReq;
+    let ok = 0;
+    setLoading(true);
+    try {
+      for (const file of files) {
+        const updated = await uploadDeliverableFile(file, working);
+        if (updated) { working = updated; ok++; }
+      }
+      if (ok > 0) addToast(`${ok} entregable${ok > 1 ? 's' : ''} subido${ok > 1 ? 's' : ''} correctamente.`, 'success');
     } finally {
       setLoading(false);
     }
@@ -1963,53 +1999,75 @@ export default function GanaPlayMainApp() {
                   </div>
                 </div>
 
-                {/* Columna derecha: piezas finales */}
+                {/* Columna derecha: entregables */}
                 <div>
-                  <h3 style={{ margin: '0 0 16px', fontSize: '15px', color: 'var(--text-primary)' }}>Piezas finales (entregables)</h3>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
-                    {DIMENSION_OPTIONS.map(o => o.key).filter(d => selectedReq.dimensions.includes(d)).map(dim => {
-                      const creative = selectedReq.creatives.find(c => c.type === dim);
+                  <h3 style={{ margin: '0 0 12px', fontSize: '15px', color: 'var(--text-primary)' }}>Entregables</h3>
+
+                  {selectedReq.dimensions.length > 0 && (
+                    <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', alignItems: 'center', marginBottom: '12px' }}>
+                      <span style={{ fontSize: '11px', color: 'var(--text-secondary)', fontWeight: 600 }}>Formatos solicitados:</span>
+                      {selectedReq.dimensions.map(d => (
+                        <span key={d} className="badge" style={{ background: 'var(--surface-2)', color: 'var(--text-secondary)', fontSize: '10px' }}>{d}</span>
+                      ))}
+                    </div>
+                  )}
+
+                  {role === 'designer' && (
+                    <>
+                      <label className="btn" style={{ width: '100%', cursor: 'pointer', padding: '12px' }}>
+                        <UploadCloud size={16} /> Subir entregables (uno o varios)
+                        <input type="file" multiple accept=".jpg,.jpeg,.png,.webp,.pdf,.zip"
+                          onChange={handleDeliverablesUpload} style={{ display: 'none' }} />
+                      </label>
+                      <p style={{ fontSize: '11px', color: 'var(--text-muted)', margin: '8px 0 14px' }}>
+                        Formatos: JPG, PNG, WEBP, PDF, ZIP. Puedes seleccionar varios archivos a la vez.
+                      </p>
+                    </>
+                  )}
+
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                    {selectedReq.creatives.length === 0 && (
+                      <div style={{ fontSize: '13px', color: 'var(--text-muted)', textAlign: 'center', padding: '26px', border: '1px dashed var(--border-color)', borderRadius: '12px' }}>
+                        {role === 'designer' ? 'Aún no hay entregables. Sube uno o varios archivos arriba.' : 'Aún no hay entregables subidos por el diseñador.'}
+                      </div>
+                    )}
+                    {selectedReq.creatives.map((creative, idx) => {
+                      const isFile = /\.(pdf|zip)$/i.test(creative.type);
                       return (
-                        <div key={dim} className="card" style={{ border: '1px dashed var(--border-color)', padding: '16px' }}>
-                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
-                            <strong style={{ fontSize: '13px', color: 'var(--text-primary)' }}>Formato: {dim}</strong>
-                            {creative?.aiEvaluation && <span className={`badge badge-${creative.aiEvaluation.color}`} style={{ fontSize: '11px' }}>Puntaje IA: {creative.aiEvaluation.rating}/10</span>}
-                          </div>
-                          {creative ? (
-                            <div style={{ display: 'flex', gap: '14px', alignItems: 'flex-start' }}>
-                              <img src={creative.url} alt={`Arte ${dim}`} style={{ width: '92px', height: '92px', objectFit: 'cover', borderRadius: '8px', flexShrink: 0, border: '1px solid var(--border-color)' }} />
-                              <div style={{ flex: 1, fontSize: '12px', color: 'var(--text-secondary)', lineHeight: 1.5 }}>{creative.aiEvaluation?.explanation || 'Pieza entregada.'}</div>
-                              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', flexShrink: 0 }}>
-                                {(role === 'admin' || role === 'cm') && (
-                                  <button className="btn-secondary" style={{ padding: '7px 12px', fontSize: '12px', borderRadius: '9px', cursor: 'pointer' }}
-                                    onClick={() => handleDownload(creative, selectedReq.id, dim)}>
-                                    <Download size={14} /> Descargar
-                                  </button>
-                                )}
-                                {role === 'designer' && (
-                                  <button className="btn-danger" style={{ padding: '7px 12px', fontSize: '12px', borderRadius: '9px', cursor: 'pointer' }}
-                                    onClick={() => handleDeleteCreative(selectedReq.id, dim)}>
-                                    <Trash2 size={14} /> Eliminar
-                                  </button>
-                                )}
+                        <div key={idx} className="card" style={{ padding: '14px' }}>
+                          <div style={{ display: 'flex', gap: '12px', alignItems: 'flex-start' }}>
+                            {isFile ? (
+                              <div style={{ width: '70px', height: '70px', borderRadius: '8px', flexShrink: 0, background: 'var(--surface-2)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                                <FileText size={26} color="var(--text-secondary)" />
                               </div>
-                            </div>
-                          ) : (
-                            role === 'designer' ? (
-                              <label className="btn-secondary" style={{ width: '100%', cursor: 'pointer', borderRadius: '10px', padding: '10px' }}>
-                                <UploadCloud size={15} /> Subir pieza «{dim}»
-                                <input type="file" accept=".jpg,.jpeg,.png,.webp,.pdf,.zip" onChange={(e) => handleDesignerUpload(e, dim)} style={{ display: 'none' }} />
-                              </label>
                             ) : (
-                              <div style={{ fontSize: '12px', color: 'var(--text-muted)', textAlign: 'center', padding: '8px' }}>Pendiente de entrega por el diseñador.</div>
-                            )
-                          )}
+                              <img src={creative.url} alt={creative.type} style={{ width: '70px', height: '70px', objectFit: 'cover', borderRadius: '8px', flexShrink: 0, border: '1px solid var(--border-color)' }} />
+                            )}
+                            <div style={{ flex: 1, minWidth: 0 }}>
+                              <div style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text-primary)', wordBreak: 'break-word' }}>{creative.type}</div>
+                              {creative.aiEvaluation && (
+                                <span className={`badge badge-${creative.aiEvaluation.color}`} style={{ fontSize: '10px', marginTop: '4px' }}>IA: {creative.aiEvaluation.rating}/10</span>
+                              )}
+                              {creative.aiEvaluation?.explanation && (
+                                <p style={{ fontSize: '11px', color: 'var(--text-secondary)', margin: '6px 0 0', lineHeight: 1.5 }}>{creative.aiEvaluation.explanation}</p>
+                              )}
+                            </div>
+                          </div>
+                          <div style={{ display: 'flex', gap: '8px', marginTop: '10px' }}>
+                            <button className="btn-secondary" style={{ flex: 1, padding: '7px 12px', fontSize: '12px', borderRadius: '9px', cursor: 'pointer' }}
+                              onClick={() => handleDownload(creative, selectedReq.id, creative.type)}>
+                              <Download size={14} /> Descargar
+                            </button>
+                            {role === 'designer' && (
+                              <button className="btn-danger" style={{ padding: '7px 12px', fontSize: '12px', borderRadius: '9px', cursor: 'pointer' }}
+                                onClick={() => handleDeleteCreative(selectedReq.id, creative.type)}>
+                                <Trash2 size={14} />
+                              </button>
+                            )}
+                          </div>
                         </div>
                       );
                     })}
-                    {selectedReq.dimensions.length === 0 && (
-                      <div style={{ fontSize: '13px', color: 'var(--text-muted)', textAlign: 'center', padding: '20px' }}>Esta solicitud no tiene dimensiones definidas.</div>
-                    )}
                   </div>
                 </div>
               </div>
