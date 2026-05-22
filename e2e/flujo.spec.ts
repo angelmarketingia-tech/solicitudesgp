@@ -69,3 +69,23 @@ test.describe("Centro de Diseño", () => {
     ).toBeVisible({ timeout: 20_000 });
   });
 });
+
+test.describe("Perfil Community Manager", () => {
+  test("la nueva solicitud viene preseleccionada para Community", async ({ page }) => {
+    const PASS = process.env.E2E_GENERAL_PASS || "ganaplay2026";
+    await page.goto("/");
+    await page.getByText("Community Manager").click();
+    await page.getByPlaceholder("••••••••••••").fill(PASS);
+    await page.getByRole("button", { name: /Acceder al sistema/i }).click();
+    await expect(
+      page.getByRole("heading", { name: /Solicitudes de diseño/i })
+    ).toBeVisible({ timeout: 20_000 });
+    await page.getByRole("button", { name: /^Nueva$/i }).click();
+    await expect(
+      page.getByRole("heading", { name: /Nueva solicitud de diseño/i })
+    ).toBeVisible();
+    // Nombre y correo del solicitante vienen preseleccionados.
+    await expect(page.getByPlaceholder("Tu nombre")).toHaveValue("Community Manager");
+    await expect(page.getByPlaceholder("nombre@ganaplay.com")).toHaveValue("Fernanda.Monrroy@ganaplay.com");
+  });
+});

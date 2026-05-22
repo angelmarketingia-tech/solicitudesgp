@@ -57,8 +57,11 @@ export async function POST(req: Request) {
           if (part.type === "text") textParts.push(part.text ?? "");
           else if (part.type === "image_url") imageParts.push(part.image_url?.url ?? "");
         }
+        // El modelo de texto no procesa imágenes: NO se envía el contenido
+        // de la imagen (sería pesado e inútil). Solo se avisa de su presencia.
         const imageNote = imageParts.length > 0
-          ? `\n[El usuario adjuntó ${imageParts.length} imagen(es). URL: ${imageParts.join(", ")}. Analízala según el contexto del requerimiento.]`
+          ? `\n[El usuario adjuntó ${imageParts.length} imagen(es). El modelo actual no tiene visión: ` +
+            `pídele que describa la pieza en texto (jerarquía, copy, colores, CTA) para poder ayudarle.]`
           : "";
         content = textParts.join("\n") + imageNote;
       } else {

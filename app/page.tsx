@@ -18,6 +18,7 @@ import {
 } from 'firebase/firestore';
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { emailForUser, DEFAULT_TRAFFICKER_EMAIL } from '@/lib/users';
+import { compressImageToDataUrl, validateImage } from '@/lib/image';
 
 // ─── Configuración visual de estados y prioridades (tema claro GanaPlay) ───
 const STATUS_COLORS: Record<string, string> = {
@@ -49,6 +50,14 @@ const AREAS = ["Pauta", "Redes Sociales", "CMR"];
 const CHANNELS = ["Facebook", "Instagram", "Página Web", "CMR"];
 
 const DIMENSION_OPTIONS = [
+  // ── Redes sociales (sugerido por defecto: Instagram Feed vertical) ──
+  { key: "Post de redes",      label: "Post de redes",      sub: "Pieza para redes sociales" },
+  { key: "IG Feed cuadrado",   label: "IG Feed cuadrado",   sub: "1080 × 1080 px" },
+  { key: "IG Feed vertical",   label: "IG Feed vertical",   sub: "1080 × 1350 px ★" },
+  { key: "IG Feed horizontal", label: "IG Feed horizontal", sub: "1080 × 566 px" },
+  { key: "IG Story/Reel",      label: "IG Story / Reel",    sub: "1080 × 1920 px" },
+  { key: "Post",               label: "Post",               sub: "Publicación general" },
+  // ── Formatos existentes (se mantienen por compatibilidad) ──
   { key: "1080x1080",  label: "1080×1080", sub: "Feed cuadrado" },
   { key: "Historia",   label: "Historia",  sub: "9:16 vertical" },
   { key: "General",    label: "General",   sub: "Formato libre" },
@@ -57,6 +66,16 @@ const DIMENSION_OPTIONS = [
   { key: "Hero Web",   label: "Hero Web",  sub: "1920×1080" },
   { key: "Half Page",  label: "Half Page", sub: "300×600" },
 ];
+
+// Formato sugerido por defecto para piezas de redes sociales.
+const DEFAULT_SOCIAL_DIMENSION = "IG Feed vertical";
+
+// Preselección por perfil: área y nombre del solicitante.
+const PROFILE_DEFAULTS: Record<string, { area: string; requesterName: string }> = {
+  admin:    { area: "Pauta",          requesterName: "Trafficker" },
+  cm:       { area: "Redes Sociales", requesterName: "Community Manager" },
+  designer: { area: "Redes Sociales", requesterName: "" },
+};
 
 // ─── Diseñadores del sistema ───
 // Las contraseñas NO viven aquí: se validan en el servidor vía /api/auth.
@@ -138,6 +157,7 @@ type RequestMessage = {
   authorName: string;
   authorRole: string;
   message: string;
+  image?: string;
   isInternal?: boolean;
   createdAt?: { seconds: number } | null;
 };
@@ -212,6 +232,7 @@ export default function GanaPlayMainApp() {
   const [reqMessages, setReqMessages] = useState<RequestMessage[]>([]);
   const [reqMsgInput, setReqMsgInput] = useState("");
   const [reqMsgInternal, setReqMsgInternal] = useState(false);
+  const [reqMsgImage, setReqMsgImage] = useState<string | null>(null);
   const reqChatRef = useRef<HTMLDivElement>(null);
 
   // ── Sub-vista del Centro de Diseño ──
@@ -350,11 +371,16 @@ export default function GanaPlayMainApp() {
     if (reqChatRef.current) reqChatRef.current.scrollTop = reqChatRef.current.scrollHeight;
   }, [reqMessages]);
 
-  // ─── Autocompletar datos del solicitante según el usuario ───
+  // ─── Preselección de datos del solicitante según el perfil ───
+  // Cada perfil precarga su área, nombre y correo para reducir clics.
   useEffect(() => {
     if (!role) return;
-    setRequesterName(prev => prev || userName);
-    setRequesterEmail(prev => prev || emailForUser(userName) || (role === 'admin' ? DEFAULT_TRAFFICKER_EMAIL : ''));
+    const def = PROFILE_DEFAULTS[role];
+    if (def?.area) setArea(def.area);
+    setRequesterName(def?.requesterName || userName);
+    setRequesterEmail(emailForUser(userName) || (role === 'admin' ? DEFAULT_TRAFFICKER_EMAIL : ''));
+    // Community Manager: el formato de redes ya viene sugerido (menos clics).
+    if (role === 'cm') setDimensions(prev => prev.length ? prev : [DEFAULT_SOCIAL_DIMENSION]);
   }, [role, userName]);
 
   const toggleSelection = (setter: React.Dispatch<React.SetStateAction<string[]>>, list: string[], val: string) => {
@@ -462,37 +488,38 @@ export default function GanaPlayMainApp() {
     }
   };
 
+  // Imagen de referencia: se comprime y guarda como data URL (no usa Storage).
   const handleRefUpload = async (e: ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
+    e.target.value = "";
     if (!file) return;
-    if (file.size > 8 * 1024 * 1024) { addToast("La imagen supera 8 MB.", 'error'); return; }
+    const err = validateImage(file);
+    if (err) { addToast(err, 'error'); return; }
     setLoading(true);
     try {
-      const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_');
-      const storageRef = ref(storage, `references/${Date.now()}_${safeName}`);
-      const snapshot = await uploadBytes(storageRef, file);
-      const downloadURL = await getDownloadURL(snapshot.ref);
-      setReferenceImg(downloadURL);
-      addToast("Imagen de referencia subida.", 'success');
-    } catch (err: unknown) {
-      addToast("Error subiendo referencia: " + (err instanceof Error ? err.message : ""), 'error');
+      const dataUrl = await compressImageToDataUrl(file);
+      setReferenceImg(dataUrl);
+      addToast("Imagen de referencia lista.", 'success');
+    } catch (e2: unknown) {
+      addToast("Error procesando la imagen: " + (e2 instanceof Error ? e2.message : ""), 'error');
     } finally {
       setLoading(false);
     }
   };
 
+  // Imagen del chat IA: se comprime a data URL (no usa Storage).
   const handleChatImageUpload = async (e: ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
+    e.target.value = "";
     if (!file) return;
+    const err = validateImage(file);
+    if (err) { addToast(err, 'error'); return; }
     setLoading(true);
     try {
-      const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_');
-      const storageRef = ref(storage, `chat_ai/${Date.now()}_${safeName}`);
-      const snapshot = await uploadBytes(storageRef, file);
-      const downloadURL = await getDownloadURL(snapshot.ref);
-      setChatImage(downloadURL);
-    } catch (err: unknown) {
-      addToast("Error subiendo imagen al chat: " + (err instanceof Error ? err.message : ""), 'error');
+      const dataUrl = await compressImageToDataUrl(file, { maxDimension: 1100, maxBytes: 380 * 1024 });
+      setChatImage(dataUrl);
+    } catch (e2: unknown) {
+      addToast("Error procesando la imagen: " + (e2 instanceof Error ? e2.message : ""), 'error');
     } finally {
       setLoading(false);
     }
@@ -544,23 +571,56 @@ export default function GanaPlayMainApp() {
     }
   };
 
-  // ─── Enviar mensaje en el chat de una solicitud ───
+  // ─── Enviar comentario/mensaje en una solicitud (texto + imagen opcional) ───
   const sendRequestMessage = async () => {
-    if (!reqMsgInput.trim() || !selectedReq) return;
+    if ((!reqMsgInput.trim() && !reqMsgImage) || !selectedReq) return;
     const text = reqMsgInput.trim();
+    const image = reqMsgImage;
     setReqMsgInput("");
+    setReqMsgImage(null);
     try {
       await addDoc(collection(db, "requests", selectedReq.id, "messages"), {
         authorName: userName,
         authorRole: role,
         message: text,
+        ...(image ? { image } : {}),
         isInternal: reqMsgInternal,
         createdAt: serverTimestamp(),
       });
     } catch {
       setReqMsgInput(text);
-      addToast("No se pudo enviar el mensaje.", 'error');
+      setReqMsgImage(image);
+      addToast("No se pudo enviar el comentario.", 'error');
     }
+  };
+
+  // Procesa una imagen (pegada o adjunta) para el comentario.
+  const stageCommentImage = useCallback(async (file: Blob & { type: string; size: number; name?: string }) => {
+    const err = validateImage(file);
+    if (err) { addToast(err, 'error'); return; }
+    try {
+      const dataUrl = await compressImageToDataUrl(file, { maxDimension: 1300, maxBytes: 420 * 1024 });
+      setReqMsgImage(dataUrl);
+      addToast("Imagen lista para enviar.", 'success');
+    } catch {
+      addToast("No se pudo procesar la imagen.", 'error');
+    }
+  }, [addToast]);
+
+  // Pegar imagen con Ctrl+V / Cmd+V en el campo de comentario.
+  const handleCommentPaste = (e: React.ClipboardEvent) => {
+    const item = Array.from(e.clipboardData.items).find(i => i.type.startsWith("image/"));
+    if (item) {
+      e.preventDefault();
+      const file = item.getAsFile();
+      if (file) void stageCommentImage(file);
+    }
+  };
+
+  const handleCommentAttach = (e: ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (file) void stageCommentImage(file);
   };
 
   // Evaluación IA de una pieza, en segundo plano: NO bloquea la subida.
@@ -1567,10 +1627,15 @@ export default function GanaPlayMainApp() {
                 {chatLoading && <div style={{ alignSelf: 'flex-start', fontSize: '12px', color: 'var(--text-muted)' }}>Andromeda está escribiendo…</div>}
               </div>
               {chatImage && (
-                <div style={{ padding: '8px 12px', background: 'var(--accent-soft)', display: 'flex', alignItems: 'center', gap: '10px' }}>
-                  <img src={chatImage} alt="Vista previa" style={{ height: '36px', borderRadius: '4px' }} />
-                  <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Imagen cargada</span>
-                  <X size={16} onClick={() => setChatImage(null)} style={{ cursor: 'pointer', color: 'var(--text-secondary)' }} />
+                <div style={{ padding: '8px 12px', background: 'var(--accent-soft)', borderTop: '1px solid var(--border-color)' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                    <img src={chatImage} alt="Vista previa" style={{ height: '36px', borderRadius: '4px' }} />
+                    <span style={{ fontSize: '12px', color: 'var(--text-secondary)', flex: 1 }}>Imagen adjunta</span>
+                    <X size={16} onClick={() => setChatImage(null)} style={{ cursor: 'pointer', color: 'var(--danger)' }} />
+                  </div>
+                  <p style={{ fontSize: '10px', color: 'var(--warning)', margin: '6px 0 0', lineHeight: 1.4 }}>
+                    ⚠️ La IA actual (DeepSeek) no analiza imágenes. Descríbela en tu mensaje (copy, colores, CTA) para recibir feedback.
+                  </p>
                 </div>
               )}
               <div style={{ padding: '12px', borderTop: '1px solid var(--border-color)', display: 'flex', gap: '8px', alignItems: 'center' }}>
@@ -1964,15 +2029,18 @@ export default function GanaPlayMainApp() {
                     </div>
                   )}
 
-                  {/* Chat de la solicitud */}
+                  {/* Comentarios / Recomendaciones (texto + imágenes) */}
                   <div className="card" style={{ padding: '18px' }}>
-                    <h3 style={{ margin: '0 0 12px', fontSize: '15px', display: 'flex', alignItems: 'center', gap: '8px', color: 'var(--text-primary)' }}>
-                      <MessageSquare size={16} color="var(--accent-color)" /> Chat de la solicitud
+                    <h3 style={{ margin: '0 0 4px', fontSize: '15px', display: 'flex', alignItems: 'center', gap: '8px', color: 'var(--text-primary)' }}>
+                      <MessageSquare size={16} color="var(--accent-color)" /> Comentarios / Recomendaciones
                     </h3>
-                    <div ref={reqChatRef} style={{ maxHeight: '240px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '10px', marginBottom: '12px' }}>
+                    <p style={{ fontSize: '11px', color: 'var(--text-muted)', margin: '0 0 12px' }}>
+                      Escribe o pega referencias (datos del partido, estadio, fecha…). Puedes pegar imágenes con Ctrl+V.
+                    </p>
+                    <div ref={reqChatRef} style={{ maxHeight: '260px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '10px', marginBottom: '12px' }}>
                       {reqMessages.filter(m => role === 'designer' || !m.isInternal).length === 0 && (
                         <p style={{ fontSize: '12px', color: 'var(--text-muted)', textAlign: 'center', padding: '16px 0', margin: 0 }}>
-                          Aún no hay mensajes. Escribe una pregunta o comentario para coordinar la solicitud.
+                          Aún no hay comentarios. Escribe una recomendación o pega una imagen de referencia.
                         </p>
                       )}
                       {reqMessages.filter(m => role === 'designer' || !m.isInternal).map(m => {
@@ -1985,7 +2053,12 @@ export default function GanaPlayMainApp() {
                               {m.createdAt?.seconds ? ' · ' + new Date(m.createdAt.seconds * 1000).toLocaleString('es-ES', { dateStyle: 'short', timeStyle: 'short' }) : ''}
                             </div>
                             <div style={{ padding: '9px 13px', borderRadius: '12px', fontSize: '13px', color: 'var(--text-primary)', border: '1px solid var(--border-color)', background: m.isInternal ? 'var(--warning-soft)' : isMine ? 'var(--accent-soft)' : 'var(--surface-2)' }}>
-                              {m.message}
+                              {m.message && <div style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{m.message}</div>}
+                              {m.image && (
+                                <img src={m.image} alt="Imagen del comentario" loading="lazy"
+                                  style={{ marginTop: m.message ? '8px' : 0, maxWidth: '100%', maxHeight: '260px', borderRadius: '8px', cursor: 'pointer', display: 'block' }}
+                                  onClick={() => window.open(m.image, '_blank')} />
+                              )}
                             </div>
                           </div>
                         );
@@ -1997,10 +2070,22 @@ export default function GanaPlayMainApp() {
                         Nota interna (no visible para el solicitante)
                       </label>
                     )}
-                    <div style={{ display: 'flex', gap: '8px' }}>
+                    {reqMsgImage && (
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '8px', background: 'var(--surface-1)', border: '1px solid var(--border-color)', borderRadius: '10px', marginBottom: '8px' }}>
+                        <img src={reqMsgImage} alt="Vista previa" style={{ height: '44px', borderRadius: '6px' }} />
+                        <span style={{ fontSize: '12px', color: 'var(--text-secondary)', flex: 1 }}>Imagen lista para enviar</span>
+                        <X size={16} style={{ cursor: 'pointer', color: 'var(--danger)' }} onClick={() => setReqMsgImage(null)} />
+                      </div>
+                    )}
+                    <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                      <label aria-label="Adjuntar imagen" title="Adjuntar imagen" style={{ cursor: 'pointer', color: 'var(--accent-color)', width: 'auto', display: 'flex' }}>
+                        <ImageIcon size={20} />
+                        <input type="file" accept="image/png,image/jpeg,image/webp" style={{ display: 'none' }} onChange={handleCommentAttach} />
+                      </label>
                       <input type="text" value={reqMsgInput} onChange={e => setReqMsgInput(e.target.value)}
                         onKeyDown={e => e.key === 'Enter' && sendRequestMessage()}
-                        placeholder="Escribe un mensaje o pregunta…" style={{ fontSize: '13px' }} />
+                        onPaste={handleCommentPaste}
+                        placeholder="Comentario o recomendación… (pega imágenes con Ctrl+V)" style={{ fontSize: '13px', flex: 1 }} />
                       <button className="btn" style={{ padding: '10px' }} onClick={sendRequestMessage}><Send size={16} /></button>
                     </div>
                   </div>

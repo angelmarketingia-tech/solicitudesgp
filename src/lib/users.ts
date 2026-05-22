@@ -10,13 +10,17 @@ export const DEFAULT_TRAFFICKER_EMAIL =
   (process.env.NEXT_PUBLIC_DEFAULT_TRAFFICKER_EMAIL || "").trim() ||
   "angel.vaca@ganaplay.com";
 
+export const DEFAULT_COMMUNITY_EMAIL =
+  (process.env.NEXT_PUBLIC_COMMUNITY_EMAIL || "").trim() ||
+  "Fernanda.Monrroy@ganaplay.com";
+
 /**
  * Directorio nombre → correo. Completa los correos del resto del equipo
  * para que el destinatario se autocomplete al crear/entregar solicitudes.
  */
 export const USER_DIRECTORY: Record<string, string> = {
   "Trafficker": DEFAULT_TRAFFICKER_EMAIL,
-  "Community Manager": "", // TODO: completar correo del CM
+  "Community Manager": DEFAULT_COMMUNITY_EMAIL,
   "Juan David": "",        // TODO: completar correo del diseñador
   "Eliana": "",            // TODO: completar correo del diseñador
   "Verónica": "",          // TODO: completar correo del diseñador
