@@ -16,7 +16,7 @@ import {
   collection, doc, onSnapshot, setDoc, updateDoc,
   addDoc, query, orderBy, serverTimestamp
 } from 'firebase/firestore';
-import { ref, uploadBytes, uploadBytesResumable, getDownloadURL } from 'firebase/storage';
+import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { emailForUser, DEFAULT_TRAFFICKER_EMAIL } from '@/lib/users';
 
 // ─── Configuración visual de estados y prioridades (tema claro GanaPlay) ───
@@ -205,7 +205,6 @@ export default function GanaPlayMainApp() {
 
   // ── Archivos / chat ──
   const [loading, setLoading] = useState(false);
-  const [uploadProgress, setUploadProgress] = useState<number | null>(null);
   const [aiBriefLoading, setAiBriefLoading] = useState(false);
   const [contextMenu, setContextMenu] = useState<{ reqId: string; x: number; y: number } | null>(null);
 
@@ -579,19 +578,14 @@ export default function GanaPlayMainApp() {
     }
     const isImage = ['jpg', 'jpeg', 'png', 'webp'].includes(ext);
     const reqSnapshot = selectedReq;
-    setUploadProgress(0);
+    setLoading(true);
     try {
       const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_');
       const storageRef = ref(storage, `creatives/${reqSnapshot.id}/${type.replace(/\s/g, '_')}_${Date.now()}_${safeName}`);
-      const task = uploadBytesResumable(storageRef, file);
-      await new Promise<void>((resolve, reject) => {
-        task.on('state_changed',
-          (snap) => setUploadProgress(Math.round((snap.bytesTransferred / snap.totalBytes) * 100)),
-          reject,
-          () => resolve(),
-        );
-      });
-      const downloadURL = await getDownloadURL(task.snapshot.ref);
+      // Subida simple (uploadBytes): estable y sin requisitos extra de CORS
+      // en el bucket. La subida reanudable bloqueaba en algunos navegadores.
+      const snapshot = await uploadBytes(storageRef, file);
+      const downloadURL = await getDownloadURL(snapshot.ref);
 
       // Evaluación IA opcional (solo imágenes) — si falla, la pieza se guarda igual.
       let aiEvaluation: AIEvaluation | undefined = undefined;
@@ -656,7 +650,7 @@ export default function GanaPlayMainApp() {
     } catch (err: unknown) {
       addToast("Error al subir la pieza: " + (err instanceof Error ? err.message : ""), 'error');
     } finally {
-      setUploadProgress(null);
+      setLoading(false);
     }
   };
 
@@ -2024,18 +2018,13 @@ export default function GanaPlayMainApp() {
         </div>
       )}
 
-      {/* OVERLAY DE CARGA */}
-      {loading && <div className="loading-overlay"><div className="loader" /><p>Procesando…</p></div>}
-
-      {/* PROGRESO DE SUBIDA DE ARTE */}
-      {uploadProgress !== null && (
+      {/* OVERLAY DE CARGA / SUBIDA DE ARCHIVOS */}
+      {loading && (
         <div className="loading-overlay">
-          <div style={{ width: '280px', textAlign: 'center' }}>
+          <div style={{ width: '260px', textAlign: 'center' }}>
             <UploadCloud size={32} color="var(--accent-color)" style={{ marginBottom: '12px' }} />
-            <p style={{ margin: '0 0 10px', fontWeight: 700, color: 'var(--text-primary)' }}>Subiendo arte… {uploadProgress}%</p>
-            <div style={{ height: '10px', background: 'var(--surface-2)', borderRadius: '20px', overflow: 'hidden' }}>
-              <div style={{ height: '100%', width: `${uploadProgress}%`, background: 'var(--accent-color)', transition: 'width 0.2s ease' }} />
-            </div>
+            <div className="loader" style={{ margin: '0 auto 12px' }} />
+            <p style={{ margin: 0, fontWeight: 700, color: 'var(--text-primary)' }}>Procesando archivo…</p>
           </div>
         </div>
       )}
