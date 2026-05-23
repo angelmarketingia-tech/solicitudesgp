@@ -38,6 +38,10 @@ yarn-error.log*
 .env*
 !.env.example
 
+# Manual de marca (PDF >100MB — guardar en Google Drive del equipo, no en git)
+logo/MANUAL DE MARCA*.pdf
+logo/*.pdf
+
 # vercel
 .vercel
 

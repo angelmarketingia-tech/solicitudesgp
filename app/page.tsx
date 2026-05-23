@@ -244,11 +244,13 @@ export default function GanaPlayMainApp() {
       const saved = localStorage.getItem('andromeda_chat');
       if (saved) return JSON.parse(saved).slice(-20);
     } catch {}
-    return [{ role: 'assistant' as const, content: 'Hola. Soy la IA Andromeda de Meta Ads. Puedo analizar tus piezas si las subes. ¿En qué recomendación creativa te puedo ayudar?' }];
+    return [{ role: 'assistant' as const, content: 'Hola. Soy IA Andromeda, especialista en Meta Ads y diseño creativo de GanaPlay. Sube una pieza y te doy feedback con scoring por marca, legibilidad, jerarquía visual y formato.' }];
   });
   const [chatInput, setChatInput] = useState("");
   const [chatLoading, setChatLoading] = useState(false);
   const [chatImage, setChatImage] = useState<string | null>(null);
+  const [chatLastSentImage, setChatLastSentImage] = useState(false);
+  const [aiCaps, setAiCaps] = useState<{ aiConfigured: boolean; visionAvailable: boolean; textProvider?: { name: string; model: string } | null; visionProvider?: { name: string; model: string } | null } | null>(null);
 
   // ── Chat de equipo ──
   const [teamChatContent, setTeamChatContent] = useState<DesignerChatMsg[]>([]);
@@ -338,6 +340,20 @@ export default function GanaPlayMainApp() {
   useEffect(() => {
     try { localStorage.setItem('andromeda_chat', JSON.stringify(chatMessages.slice(-20))); } catch {}
   }, [chatMessages]);
+
+  // Capacidades del backend (visión / proveedor) — una sola llamada al abrir la app.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch('/api/chat', { method: 'GET' });
+        if (!res.ok) return;
+        const data = await res.json();
+        if (!cancelled) setAiCaps(data);
+      } catch { /* silencioso: la UI seguirá funcionando */ }
+    })();
+    return () => { cancelled = true; };
+  }, []);
 
   useEffect(() => {
     const handler = () => setContextMenu(null);
@@ -665,7 +681,13 @@ export default function GanaPlayMainApp() {
   }, []);
 
   // Sube un archivo entregable. Devuelve la solicitud actualizada (o null si falla).
-  // La IA y el correo NO bloquean: corren después.
+  // Estrategia anti-cuelgue:
+  //   1. Timeout duro de 25 s (no 90).
+  //   2. Toast de progreso visible para que el usuario sepa que algo pasa.
+  //   3. Si la subida a Storage falla y es una IMAGEN, fallback automático a
+  //      data URL comprimida en Firestore (igual que referencias/comentarios).
+  //      Así el diseñador NUNCA queda bloqueado por una caída de Storage.
+  //   4. ZIP/PDF/archivos grandes solo pueden ir a Storage: si falla, error.
   const uploadDeliverableFile = useCallback(async (
     file: File,
     reqSnapshot: RequestType,
@@ -683,19 +705,71 @@ export default function GanaPlayMainApp() {
     const isImage = ['jpg', 'jpeg', 'png', 'webp'].includes(ext);
     const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_');
     const type = file.name;
+
+    addToast(`Subiendo "${safeName}"…`, 'info');
+
+    let downloadURL: string | null = null;
+    let usedFallback = false;
+    let storageErrorMsg: string | null = null;
+
+    // ── Intento 1: Firebase Storage con timeout corto ────────────────
     try {
       const storageRef = ref(storage, `creatives/${reqSnapshot.id}/${Date.now()}_${safeName}`);
-      // Timeout de seguridad: si la subida tarda demasiado, error claro (no congela).
       const snapshot = await Promise.race([
         uploadBytes(storageRef, file),
         new Promise<never>((_, reject) => setTimeout(
-          () => reject(new Error("La subida tardó demasiado. Revisa tu conexión a internet.")), 90000)),
+          () => reject(new Error("storage/timeout: la subida tardó más de 25 s.")), 25000)),
       ]);
-      const downloadURL = await getDownloadURL(snapshot.ref);
+      downloadURL = await getDownloadURL(snapshot.ref);
+    } catch (err: unknown) {
+      const code = (err && typeof err === 'object' && 'code' in err) ? String((err as { code: string }).code) : '';
+      const rawMsg = err instanceof Error ? err.message : 'error desconocido';
+      console.warn(`[uploadDeliverable] Storage falló para ${safeName}:`, code || rawMsg, err);
+      if (code === 'storage/unauthorized' || rawMsg.includes('storage/timeout') ||
+          code === 'storage/unknown' || code === 'storage/retry-limit-exceeded' ||
+          code === 'storage/quota-exceeded' || code === 'storage/canceled') {
+        storageErrorMsg = code === 'storage/unauthorized'
+          ? 'Storage rechazó la subida (reglas o bucket inactivo).'
+          : (code === 'storage/timeout' || rawMsg.includes('storage/timeout'))
+          ? 'Storage tardó más de 25 s. Probable bucket inactivo o sin red.'
+          : `Storage no disponible (${code || rawMsg}).`;
+      } else {
+        storageErrorMsg = rawMsg;
+      }
+    }
 
+    // ── Intento 2: fallback a data URL en Firestore (solo imágenes) ──
+    if (!downloadURL && isImage) {
+      try {
+        addToast(`Storage no respondió. Guardando "${safeName}" en Firestore…`, 'info');
+        const dataUrl = await compressImageToDataUrl(file, { maxDimension: 1800, maxBytes: 700 * 1024 });
+        downloadURL = dataUrl;
+        usedFallback = true;
+      } catch (e2) {
+        console.error('[uploadDeliverable] Fallback Firestore también falló:', e2);
+      }
+    }
+
+    if (!downloadURL) {
+      addToast(
+        `No se pudo subir "${file.name}". ${storageErrorMsg || ''} ` +
+        (isImage ? '' : 'Para PDF/ZIP es necesario activar Firebase Storage.'),
+        'error'
+      );
+      return null;
+    }
+
+    // ── Persistir en Firestore ──────────────────────────────────────
+    try {
       const newCreative: Creative = { url: downloadURL, type };
       const newCreativesList = [...reqSnapshot.creatives.filter(c => c.type !== type), newCreative];
-      const entry: HistoryEntry = { action: `Entregable subido: ${safeName}`, by: userName, at: new Date().toISOString() };
+      const entry: HistoryEntry = {
+        action: usedFallback
+          ? `Entregable subido a Firestore (Storage caído): ${safeName}`
+          : `Entregable subido: ${safeName}`,
+        by: userName,
+        at: new Date().toISOString(),
+      };
       const newHistory = [...(reqSnapshot.history || []), entry];
 
       await updateDoc(doc(db, "requests", reqSnapshot.id), {
@@ -707,7 +781,11 @@ export default function GanaPlayMainApp() {
       const updatedReq: RequestType = { ...reqSnapshot, status: "En Proceso", creatives: newCreativesList, history: newHistory };
       setSelectedReq(prev => (prev && prev.id === reqSnapshot.id) ? updatedReq : prev);
 
-      // Las siguientes acciones NO bloquean la subida (sin await):
+      if (usedFallback) {
+        addToast(`"${safeName}" guardado en Firestore (modo emergencia). Activá Storage en Firebase para uploads grandes.`, 'info');
+      }
+
+      // Acciones secundarias NO bloqueantes:
       createNotification('creative_uploaded', '🎨 Entregable subido', `${reqSnapshot.id}: "${safeName}" por ${userName}`, 'admin', reqSnapshot.id);
       if (reqSnapshot.requesterEmail) {
         sendEmailAlert({
@@ -726,14 +804,8 @@ export default function GanaPlayMainApp() {
       }
       return updatedReq;
     } catch (err: unknown) {
-      const code = (err && typeof err === 'object' && 'code' in err) ? String((err as { code: string }).code) : '';
-      let msg = err instanceof Error ? err.message : 'error desconocido';
-      if (code === 'storage/unknown' || code === 'storage/unauthorized' ||
-          code === 'storage/retry-limit-exceeded' || code === 'storage/quota-exceeded') {
-        msg = 'el almacenamiento de archivos (Firebase Storage) no está disponible. ' +
-              'El administrador debe activarlo en la consola de Firebase.';
-      }
-      addToast(`No se pudo subir "${file.name}": ${msg}`, 'error');
+      const msg = err instanceof Error ? err.message : 'error guardando en Firestore';
+      addToast(`Se subió "${safeName}" pero falló al actualizar la solicitud: ${msg}`, 'error');
       return null;
     }
   }, [userName, addToast, createNotification, sendEmailAlert, analyzeCreativeInBackground]);
@@ -758,11 +830,13 @@ export default function GanaPlayMainApp() {
   };
 
   const sendChatMessage = async () => {
+    if (chatLoading) return; // previene doble envío
     if (!chatInput.trim() && !chatImage) return;
+    const hadImage = Boolean(chatImage);
     let userContent: ChatMessage['content'] = chatInput;
     if (chatImage) {
       userContent = [
-        { type: "text", text: chatInput || "¿Qué opinas de este diseño para el algoritmo Andromeda?" },
+        { type: "text", text: chatInput || "Analiza esta pieza para Meta Ads de GanaPlay y dame scoring + recomendaciones." },
         { type: "image_url", image_url: { url: chatImage } },
       ];
     }
@@ -771,19 +845,31 @@ export default function GanaPlayMainApp() {
     setChatMessages(newMessages);
     setChatInput("");
     setChatImage(null);
+    setChatLastSentImage(hadImage);
     setChatLoading(true);
+
+    // Timeout cliente: 60 s. Evita loaders eternos si la red se traba.
+    const ctrl = new AbortController();
+    const timeoutId = setTimeout(() => ctrl.abort(), 60000);
     try {
       const res = await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ messages: newMessages }),
+        signal: ctrl.signal,
       });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error);
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data?.error || `HTTP ${res.status}`);
       setChatMessages([...newMessages, { role: "assistant", content: data.content }]);
+      if (data.meta) setAiCaps(prev => prev ? { ...prev, visionAvailable: Boolean(data.meta.visionAvailable) } : prev);
     } catch (err: unknown) {
-      setChatMessages([...newMessages, { role: "assistant", content: `Error: ${err instanceof Error ? err.message : "desconocido"}` }]);
+      const isAbort = err instanceof Error && err.name === 'AbortError';
+      const text = isAbort
+        ? "⏱️ La IA tardó demasiado. Reintenta o reduce el tamaño de la imagen."
+        : `❌ ${err instanceof Error ? err.message : "Error desconocido"}`;
+      setChatMessages([...newMessages, { role: "assistant", content: text }]);
     } finally {
+      clearTimeout(timeoutId);
       setChatLoading(false);
     }
   };
@@ -1609,7 +1695,22 @@ export default function GanaPlayMainApp() {
           ) : (
             <div className="card" style={{ width: '380px', height: '560px', display: 'flex', flexDirection: 'column', overflow: 'hidden', boxShadow: 'var(--shadow-lg)' }}>
               <div style={{ padding: '14px', borderBottom: '1px solid var(--border-color)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'var(--accent-soft)' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: 'var(--accent-dark)' }}><Bot size={22} /> <strong>IA Andromeda</strong></div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: 'var(--accent-dark)' }}>
+                    <Bot size={22} /> <strong>IA Andromeda</strong>
+                    {aiCaps && (
+                      <span title={aiCaps.visionAvailable ? `Visión: ${aiCaps.visionProvider?.model}` : 'Sin visión configurada'}
+                            style={{ fontSize: '10px', fontWeight: 700, padding: '2px 6px', borderRadius: '999px',
+                                     background: aiCaps.visionAvailable ? 'var(--success, #00783e)' : 'var(--warning, #b54708)',
+                                     color: '#fff' }}>
+                        {aiCaps.visionAvailable ? '👁 visión activa' : '⚠ sin visión'}
+                      </span>
+                    )}
+                  </div>
+                  <div style={{ fontSize: '10.5px', color: 'var(--text-muted)' }}>
+                    {aiCaps?.textProvider ? `${aiCaps.textProvider.name} · ${aiCaps.textProvider.model}` : 'Marca GanaPlay + Meta Ads'}
+                  </div>
+                </div>
                 <button aria-label="Cerrar chat" onClick={() => setChatOpen(false)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-secondary)', display: 'flex', padding: 0, width: 'auto' }}><X size={20} /></button>
               </div>
               <div ref={scrollRef} style={{ flexGrow: 1, padding: '14px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '10px' }}>
@@ -1624,18 +1725,25 @@ export default function GanaPlayMainApp() {
                     ) : msg.content}
                   </div>
                 ))}
-                {chatLoading && <div style={{ alignSelf: 'flex-start', fontSize: '12px', color: 'var(--text-muted)' }}>Andromeda está escribiendo…</div>}
+                {chatLoading && (
+                  <div style={{ alignSelf: 'flex-start', fontSize: '12px', color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                    <span style={{ display: 'inline-block', width: '8px', height: '8px', borderRadius: '50%', background: 'var(--accent-color)', animation: 'pulse 1s infinite' }} />
+                    {chatLastSentImage ? 'Analizando imagen…' : 'Andromeda está escribiendo…'}
+                  </div>
+                )}
               </div>
               {chatImage && (
                 <div style={{ padding: '8px 12px', background: 'var(--accent-soft)', borderTop: '1px solid var(--border-color)' }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
                     <img src={chatImage} alt="Vista previa" style={{ height: '36px', borderRadius: '4px' }} />
-                    <span style={{ fontSize: '12px', color: 'var(--text-secondary)', flex: 1 }}>Imagen adjunta</span>
-                    <X size={16} onClick={() => setChatImage(null)} style={{ cursor: 'pointer', color: 'var(--danger)' }} />
+                    <span style={{ fontSize: '12px', color: 'var(--text-secondary)', flex: 1 }}>Imagen lista para analizar</span>
+                    <X size={16} onClick={() => setChatImage(null)} aria-label="Quitar imagen" style={{ cursor: 'pointer', color: 'var(--danger)' }} />
                   </div>
-                  <p style={{ fontSize: '10px', color: 'var(--warning)', margin: '6px 0 0', lineHeight: 1.4 }}>
-                    ⚠️ La IA actual (DeepSeek) no analiza imágenes. Descríbela en tu mensaje (copy, colores, CTA) para recibir feedback.
-                  </p>
+                  {aiCaps && !aiCaps.visionAvailable && (
+                    <p style={{ fontSize: '10px', color: 'var(--warning)', margin: '6px 0 0', lineHeight: 1.4 }}>
+                      ⚠️ El proveedor de IA actual no soporta visión. Configura <code>OPENAI_API_KEY</code> o <code>VISION_API_KEY</code> para análisis visual real. Mientras tanto, describe la pieza en tu mensaje.
+                    </p>
+                  )}
                 </div>
               )}
               <div style={{ padding: '12px', borderTop: '1px solid var(--border-color)', display: 'flex', gap: '8px', alignItems: 'center' }}>
