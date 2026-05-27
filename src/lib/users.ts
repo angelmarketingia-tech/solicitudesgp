@@ -32,11 +32,15 @@ export const USER_DIRECTORY: Record<string, string> = {
   "Sebastian": "",         // TODO: completar correo del administrativo
 };
 
-/** Lista de operadores válidos (Roberto, Quota, Juan) — espejo del backend. */
-export const OPERATOR_USERS = ["Roberto", "Quota", "Juan"] as const;
+/** Lista de operadores válidos (Quota, Juan) — espejo del backend. */
+export const OPERATOR_USERS = ["Quota", "Juan"] as const;
 
-/** Lista de administrativos válidos (Andres, Sebastian) — espejo del backend. */
-export const ADMINISTRATIVE_USERS = ["Andres", "Sebastian"] as const;
+/**
+ * Lista de DIRECTIVOS válidos (Andres, Sebastian, Roberto) — espejo del backend.
+ * Internamente el rol se sigue llamando "administrative" por compatibilidad
+ * con datos previos; el label visible en UI es "DIRECTIVOS".
+ */
+export const ADMINISTRATIVE_USERS = ["Andres", "Sebastian", "Roberto"] as const;
 
 /** Correo asociado a un nombre de usuario (cadena vacía si no está registrado). */
 export function emailForUser(name: string): string {

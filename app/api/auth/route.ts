@@ -17,10 +17,11 @@ import { checkRateLimit, getClientIp } from "@/lib/rate-limit";
  * Roles:
  *  - admin           → Trafficker. Acceso total + eliminación permanente.
  *  - cm              → Community Manager. Crea solicitudes, ve calendario.
- *  - operator        → Operadores (Roberto, Quota, Juan). Mismos permisos
+ *  - operator        → Operadores (Quota, Juan). Mismos permisos
  *                      que CM pero cada uno con su nombre propio.
- *  - administrative  → Administrativos (Andres, Sebastian). Mismos permisos
- *                      que CM/operator, distinto perfil para auditoría.
+ *  - administrative  → DIRECTIVOS (Andres, Sebastian, Roberto). Mismos
+ *                      permisos que CM/operator, distinto perfil para
+ *                      auditoría. Label en UI: "DIRECTIVOS".
  *  - designer        → Diseñador. Centro de Diseño, entregables, IA Andromeda.
  *
  * Ninguno de los roles "internos no-admin" (cm, operator, administrative)
@@ -31,8 +32,8 @@ const PASS_TRAFFICKER = process.env.AUTH_PASS_TRAFFICKER || "";
 const PASS_GENERAL = process.env.AUTH_PASS_GENERAL || "";
 
 const DESIGNER_USERS = ["Juan David", "Eliana", "Verónica", "Caleb"];
-const OPERATOR_USERS = ["Roberto", "Quota", "Juan"];
-const ADMINISTRATIVE_USERS = ["Andres", "Sebastian"];
+const OPERATOR_USERS = ["Quota", "Juan"];
+const ADMINISTRATIVE_USERS = ["Andres", "Sebastian", "Roberto"];
 
 type AuthBody = {
   role?: "admin" | "cm" | "designer" | "operator" | "administrative";

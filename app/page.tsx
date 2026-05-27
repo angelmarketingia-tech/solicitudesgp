@@ -95,15 +95,15 @@ const PROFILE_DEFAULTS: Record<string, { area: string; requesterName: string }> 
 // Las contraseñas NO viven aquí: se validan en el servidor vía /api/auth.
 const DESIGNER_USERS = ["Juan David", "Eliana", "Verónica", "Caleb"];
 
-// ─── Operadores (Roberto, Quota, Juan) ───
+// ─── Operadores (Quota, Juan) ───
 // Perfiles con mismos permisos que CM pero cada uno con su nombre propio.
 // NO acceden al panel interno de diseñadores ni a la IA Andromeda.
-const OPERATOR_USER_LIST = ["Roberto", "Quota", "Juan"];
+const OPERATOR_USER_LIST = ["Quota", "Juan"];
 
-// ─── Administrativos (Andres, Sebastian) ───
-// Mismos permisos que CM/operador. Distinto perfil para auditoría
-// y para que los nombres salgan correctamente en historial.
-const ADMINISTRATIVE_USER_LIST = ["Andres", "Sebastian"];
+// ─── DIRECTIVOS (Andres, Sebastian, Roberto) ───
+// Mismos permisos que CM/operador. Label en UI: "DIRECTIVOS".
+// Internamente el rol se llama "administrative" (clave técnica histórica).
+const ADMINISTRATIVE_USER_LIST = ["Andres", "Sebastian", "Roberto"];
 
 type RequestStatus = "Publicado" | "Denegado" | "Declinada" | "En Proceso" | "Planeando" | "Pendiente";
 type RequestPriority = "Bajo" | "Medio" | "Alto" | "Urgente";
@@ -1381,8 +1381,8 @@ export default function GanaPlayMainApp() {
     const ROLE_CARDS = [
       { key: 'admin',          icon: '⚡', label: 'Trafficker',         sub: 'Gestión total' },
       { key: 'cm',             icon: '🌐', label: 'Community Manager',  sub: 'Redes y contenido' },
-      { key: 'operator',       icon: '👤', label: 'Operador',           sub: 'Roberto · Quota · Juan' },
-      { key: 'administrative', icon: '🗂️', label: 'Administrativo',     sub: 'Andres · Sebastian' },
+      { key: 'operator',       icon: '👤', label: 'Operador',           sub: 'Quota · Juan' },
+      { key: 'administrative', icon: '💼', label: 'DIRECTIVOS',         sub: 'Andres · Sebastian · Roberto' },
       { key: 'designer',       icon: '✦',  label: 'Diseñador',          sub: 'Equipo creativo' },
     ];
     const selectedCard = ROLE_CARDS.find(c => c.key === loginRole);
@@ -1520,7 +1520,7 @@ export default function GanaPlayMainApp() {
                 : role === 'operator'
                 ? `👤 ${userName}`
                 : role === 'administrative'
-                ? `🗂️ ${userName}`
+                ? `💼 ${userName}`
                 : `✦ ${userName}`}
             </div>
           </div>
