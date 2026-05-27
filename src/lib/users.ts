@@ -21,15 +21,16 @@ export const DEFAULT_COMMUNITY_EMAIL =
 export const USER_DIRECTORY: Record<string, string> = {
   "Trafficker": DEFAULT_TRAFFICKER_EMAIL,
   "Community Manager": DEFAULT_COMMUNITY_EMAIL,
-  "Juan David": "",        // TODO: completar correo del diseñador
-  "Eliana": "",            // TODO: completar correo del diseñador
-  "Verónica": "",          // TODO: completar correo del diseñador
-  "Caleb": "",             // TODO: completar correo del diseñador
-  "Roberto": "",           // TODO: completar correo del operador
-  "Quota": "",             // TODO: completar correo del operador
-  "Juan": "",              // TODO: completar correo del operador
-  "Andres": "",            // TODO: completar correo del administrativo
-  "Sebastian": "",         // TODO: completar correo del administrativo
+  "Juan David": "david.gutierrez@ganaplay.com",
+  "Eliana": "Eliana.Izquierdo@ganaplay.com",
+  "Verónica": "veronica.marquez@ganaplay.com",
+  "Caleb": "caleb.guevara@ganaplay.com",
+  // Operadores y Directivos: completar cuando sepamos sus emails.
+  "Roberto": "",
+  "Quota": "",
+  "Juan": "",
+  "Andres": "",
+  "Sebastian": "",
 };
 
 /** Lista de operadores válidos (Quota, Juan) — espejo del backend. */

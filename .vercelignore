@@ -1,0 +1,11 @@
+# Archivos grandes que no deben subirse a Vercel
+logo/MANUAL DE MARCA*.pdf
+logo/*.pdf
+
+# Mismo contenido que .gitignore (Vercel CLI no lo lee por defecto)
+node_modules
+.next
+.env.local
+.env*.local
+test-results
+playwright-report
