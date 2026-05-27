@@ -4,13 +4,15 @@ import { checkRateLimit, getClientIp } from "@/lib/rate-limit";
 /**
  * Validación de acceso del lado del servidor.
  *
- * Las contraseñas ya NO viven en el bundle del navegador. Se leen de variables
- * de entorno y, si no están configuradas, se usan valores por defecto para no
- * romper el sistema (recomendado sobreescribirlos en .env.local).
+ * Las contraseñas NO viven en el bundle del navegador NI como defaults
+ * en el código fuente (que es público en GitHub). Se exigen como variables
+ * de entorno; si faltan, el endpoint devuelve 500 con mensaje claro.
  *
- * Variables soportadas:
+ * Variables OBLIGATORIAS:
  *  - AUTH_PASS_TRAFFICKER  → acceso del Trafficker (rol admin)
  *  - AUTH_PASS_GENERAL     → acceso de Community Manager, Operadores y Diseñadores
+ *
+ * Configuradas en Vercel (Production) y en .env.local (Development).
  *
  * Roles:
  *  - admin     → Trafficker. Acceso total.
@@ -21,8 +23,8 @@ import { checkRateLimit, getClientIp } from "@/lib/rate-limit";
  *  - designer  → Diseñador. Centro de Diseño, entregables, IA Andromeda.
  */
 
-const PASS_TRAFFICKER = process.env.AUTH_PASS_TRAFFICKER || "angel2026";
-const PASS_GENERAL = process.env.AUTH_PASS_GENERAL || "ganaplay2026";
+const PASS_TRAFFICKER = process.env.AUTH_PASS_TRAFFICKER || "";
+const PASS_GENERAL = process.env.AUTH_PASS_GENERAL || "";
 
 const DESIGNER_USERS = ["Juan David", "Eliana", "Verónica", "Caleb"];
 const OPERATOR_USERS = ["Roberto", "Quota"];
@@ -47,6 +49,16 @@ export async function POST(req: Request) {
           error: `Demasiados intentos. Espera ${Math.ceil(rl.resetInMs / 1000)}s antes de volver a intentar.`,
         },
         { status: 429, headers: { "Retry-After": String(Math.ceil(rl.resetInMs / 1000)) } }
+      );
+    }
+
+    // Fallar fast si las passwords no están configuradas en Vercel/.env.local.
+    // Antes había defaults en el código fuente público → riesgo eliminado.
+    if (!PASS_TRAFFICKER || !PASS_GENERAL) {
+      console.error("[auth] Faltan AUTH_PASS_TRAFFICKER o AUTH_PASS_GENERAL en el entorno.");
+      return NextResponse.json(
+        { ok: false, error: "Servidor no configurado. Contacta al administrador." },
+        { status: 500 }
       );
     }
 
