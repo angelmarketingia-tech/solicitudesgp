@@ -13,10 +13,10 @@ import {
 // ─── Firebase ───
 import { db, storage } from '@/lib/firebase';
 import {
-  collection, doc, onSnapshot, setDoc, updateDoc,
-  addDoc, query, orderBy, serverTimestamp
+  collection, doc, onSnapshot, setDoc, updateDoc, deleteDoc,
+  addDoc, query, orderBy, serverTimestamp, getDocs
 } from 'firebase/firestore';
-import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
+import { ref, uploadBytes, getDownloadURL, deleteObject, listAll } from 'firebase/storage';
 import { emailForUser, DEFAULT_TRAFFICKER_EMAIL } from '@/lib/users';
 import { compressImageToDataUrl, validateImage } from '@/lib/image';
 
@@ -24,6 +24,7 @@ import { compressImageToDataUrl, validateImage } from '@/lib/image';
 const STATUS_COLORS: Record<string, string> = {
   "Publicado": "#e6f2ec",
   "Denegado": "#fdecea",
+  "Declinada": "#f5e8e8",
   "En Proceso": "#e8f1fc",
   "Planeando": "#f1ebfb",
   "Pendiente": "#fdf3e7",
@@ -32,10 +33,21 @@ const STATUS_COLORS: Record<string, string> = {
 const STATUS_TEXT_COLORS: Record<string, string> = {
   "Publicado": "#00783e",
   "Denegado": "#d92d20",
+  "Declinada": "#9c3838",
   "En Proceso": "#0b6bcb",
   "Planeando": "#7c3aed",
   "Pendiente": "#b54708",
 };
+
+// Motivos preestablecidos para declinar (selector + opción libre "Otro").
+const DECLINE_REASONS = [
+  "Información incompleta",
+  "Solicitud duplicada",
+  "Fuera de alcance",
+  "Material incorrecto",
+  "Fecha no viable",
+  "Otro",
+] as const;
 
 const PRIORITY_CONFIG: Record<string, { bg: string; text: string; label: string }> = {
   "Bajo":    { bg: "#e6f2ec", text: "#00783e", label: "Bajo" },
@@ -87,7 +99,7 @@ const DESIGNER_USERS = ["Juan David", "Eliana", "Verónica", "Caleb"];
 // NO acceden al panel interno de diseñadores ni a la IA Andromeda.
 const OPERATOR_USER_LIST = ["Roberto", "Quota"];
 
-type RequestStatus = "Publicado" | "Denegado" | "En Proceso" | "Planeando" | "Pendiente";
+type RequestStatus = "Publicado" | "Denegado" | "Declinada" | "En Proceso" | "Planeando" | "Pendiente";
 type RequestPriority = "Bajo" | "Medio" | "Alto" | "Urgente";
 
 type AIEvaluation = {
@@ -144,6 +156,11 @@ type RequestType = {
   aiFeedback?: AIFeedback;
   history?: HistoryEntry[];
   updatedAt?: unknown;
+  // ── Declinación (no destructiva) ──
+  declineReason?: string;
+  declineComment?: string;
+  declinedBy?: string;
+  declinedAt?: string;
 };
 
 type DesignerChatMsg = {
@@ -202,6 +219,17 @@ export default function GanaPlayMainApp() {
   const [loginRole, setLoginRole] = useState<"admin" | "cm" | "designer" | "operator" | null>(null);
   const [loginDesignerName, setLoginDesignerName] = useState("");
   const [loginOperatorName, setLoginOperatorName] = useState("");
+
+  // ── Modales de eliminación / declinación ──
+  const [deleteModalOpen, setDeleteModalOpen] = useState<RequestType | null>(null);
+  const [deleteConfirmText, setDeleteConfirmText] = useState("");
+  const [deleteAdminPass, setDeleteAdminPass] = useState("");
+  const [deleteLoading, setDeleteLoading] = useState(false);
+
+  const [declineModalOpen, setDeclineModalOpen] = useState<RequestType | null>(null);
+  const [declineReason, setDeclineReason] = useState<string>(DECLINE_REASONS[0]);
+  const [declineComment, setDeclineComment] = useState("");
+  const [declineLoading, setDeclineLoading] = useState(false);
   const [loginPass, setLoginPass] = useState("");
   const [loginError, setLoginError] = useState("");
   const [loginLoading, setLoginLoading] = useState(false);
@@ -980,6 +1008,169 @@ export default function GanaPlayMainApp() {
     }
   };
 
+  // ═══════════════ ELIMINACIÓN PERMANENTE (solo Trafficker) ═══════════════
+  // Flujo:
+  //  1. Server valida AUTH_PASS_TRAFFICKER y escribe audit log.
+  //  2. Cliente borra archivos en Storage (creatives/{reqId}/*).
+  //  3. Cliente borra subcolecciones (messages) y el documento principal.
+  // La solicitud NO queda en historial funcional: se elimina del todo.
+  const performPermanentDelete = useCallback(async (req: RequestType, adminPass: string) => {
+    // 1. Verificación server-side con la contraseña de admin
+    const verifyRes = await fetch("/api/requests/admin-delete", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ requestId: req.id, adminPass, by: userName }),
+    });
+    const verifyData = await verifyRes.json().catch(() => ({}));
+    if (!verifyRes.ok || !verifyData.ok) {
+      throw new Error(verifyData?.error || "No autorizado para eliminar.");
+    }
+
+    // 2. Borrar archivos de Storage (best-effort: si Storage falla, igual seguimos
+    //    con la limpieza de Firestore para no dejar el doc colgado).
+    try {
+      const folderRef = ref(storage, `creatives/${req.id}`);
+      const listing = await listAll(folderRef);
+      await Promise.all(listing.items.map(item => deleteObject(item).catch(() => undefined)));
+    } catch (err) {
+      console.warn("[permanentDelete] Storage cleanup parcial:", err);
+    }
+
+    // 3. Borrar subcolección de mensajes
+    try {
+      const msgsSnap = await getDocs(collection(db, "requests", req.id, "messages"));
+      await Promise.all(msgsSnap.docs.map(d => deleteDoc(d.ref).catch(() => undefined)));
+    } catch (err) {
+      console.warn("[permanentDelete] Limpieza de mensajes parcial:", err);
+    }
+
+    // 4. Borrar documento principal
+    await deleteDoc(doc(db, "requests", req.id));
+
+    // 5. Borrar notificaciones que referencien esta solicitud (best-effort)
+    try {
+      const notifs = firestoreNotifs.filter(n => n.requestId === req.id);
+      await Promise.all(notifs.map(n => deleteDoc(doc(db, "notifications", n.id)).catch(() => undefined)));
+    } catch { /* no bloquea */ }
+  }, [userName, firestoreNotifs]);
+
+  const handleConfirmPermanentDelete = async () => {
+    if (!deleteModalOpen) return;
+    if (role !== "admin") {
+      addToast("Solo el Trafficker puede eliminar permanentemente.", 'error');
+      return;
+    }
+    const req = deleteModalOpen;
+    if (deleteConfirmText !== req.id) {
+      addToast(`Escribe ${req.id} para confirmar.`, 'error');
+      return;
+    }
+    if (!deleteAdminPass) {
+      addToast("Ingresa tu contraseña de Trafficker.", 'error');
+      return;
+    }
+    setDeleteLoading(true);
+    try {
+      await performPermanentDelete(req, deleteAdminPass);
+      addToast(`Solicitud ${req.id} eliminada permanentemente.`, 'success');
+      // Cerrar todo y limpiar selección
+      setDeleteModalOpen(null);
+      setDeleteConfirmText("");
+      setDeleteAdminPass("");
+      if (selectedReq?.id === req.id) {
+        setSelectedReq(null);
+        setModalOpen(false);
+      }
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "Error eliminando.";
+      addToast(`No se pudo eliminar: ${msg}`, 'error');
+    } finally {
+      setDeleteLoading(false);
+    }
+  };
+
+  // ═══════════════ DECLINAR SOLICITUD (equipo interno autorizado) ═══════════════
+  const canDecline = role === "admin" || role === "cm" || role === "operator" || role === "designer";
+
+  const handleConfirmDecline = async () => {
+    if (!declineModalOpen) return;
+    if (!canDecline) {
+      addToast("No tienes permiso para declinar.", 'error');
+      return;
+    }
+    const req = declineModalOpen;
+    const reason = declineReason;
+    const comment = declineComment.trim();
+    if (reason === "Otro" && !comment) {
+      addToast('Selecciona "Otro" requiere un comentario explicando el motivo.', 'error');
+      return;
+    }
+    setDeclineLoading(true);
+    try {
+      const at = new Date().toISOString();
+      const entry: HistoryEntry = {
+        action: `Solicitud declinada: "${reason}"${comment ? ` — ${comment}` : ""}`,
+        by: userName,
+        at,
+      };
+      const newHistory = [...(req.history || []), entry];
+      const update: Record<string, unknown> = {
+        status: "Declinada",
+        declineReason: reason,
+        declinedBy: userName,
+        declinedAt: at,
+        history: newHistory,
+        updatedAt: serverTimestamp(),
+      };
+      if (comment) update.declineComment = comment;
+
+      await updateDoc(doc(db, "requests", req.id), update);
+
+      const updatedReq: RequestType = {
+        ...req,
+        status: "Declinada",
+        declineReason: reason,
+        declineComment: comment || undefined,
+        declinedBy: userName,
+        declinedAt: at,
+        history: newHistory,
+      };
+      if (selectedReq?.id === req.id) setSelectedReq(updatedReq);
+
+      addToast(`Solicitud ${req.id} declinada.`, 'success');
+
+      // Notificación interna a admin (trafficker se entera)
+      await createNotification(
+        'status_change',
+        '🚫 Solicitud declinada',
+        `${req.id} "${req.title}" declinada por ${userName} — Motivo: ${reason}`,
+        'admin',
+        req.id,
+      );
+
+      // Email al solicitante (si tiene email configurado y RESEND está activo)
+      if (req.requesterEmail) {
+        sendEmailAlert({
+          type: "decline",
+          to: req.requesterEmail,
+          request: { id: req.id, title: req.title, status: "Declinada" },
+          declinedBy: userName,
+          reason,
+          comment: comment || "",
+        });
+      }
+
+      setDeclineModalOpen(null);
+      setDeclineReason(DECLINE_REASONS[0]);
+      setDeclineComment("");
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "Error declinando.";
+      addToast(`No se pudo declinar: ${msg}`, 'error');
+    } finally {
+      setDeclineLoading(false);
+    }
+  };
+
   const handleDropOnDay = async (dateStr: string) => {
     if (!draggedReqId) return;
     try {
@@ -1483,7 +1674,7 @@ export default function GanaPlayMainApp() {
 
         {/* ─── VISTA: WORKSPACE (DISEÑADOR) ─── */}
         {activeTab === 'Equipo Diseño' && role === 'designer' && (() => {
-          const available = requests.filter(r => !r.assignedTo && r.status !== 'Publicado' && r.status !== 'Denegado');
+          const available = requests.filter(r => !r.assignedTo && r.status !== 'Publicado' && r.status !== 'Denegado' && r.status !== 'Declinada');
           const mine = requests.filter(r => r.assignedTo === userName);
           const inProgress = mine.filter(r => r.status === 'En Proceso' || r.status === 'Planeando' || r.status === 'Pendiente');
           const delivered = mine.filter(r => r.status === 'Publicado');
@@ -1493,7 +1684,7 @@ export default function GanaPlayMainApp() {
           const list = [...viewMap[designerView]].sort((a, b) => (a.deliveryDate || '').localeCompare(b.deliveryDate || ''));
           const activity = DESIGNER_USERS.map(d => ({
             name: d,
-            working: requests.filter(r => r.assignedTo === d && r.status !== 'Publicado' && r.status !== 'Denegado'),
+            working: requests.filter(r => r.assignedTo === d && r.status !== 'Publicado' && r.status !== 'Denegado' && r.status !== 'Declinada'),
           }));
           return (
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 320px', gap: '20px' }}>
@@ -1664,6 +1855,7 @@ export default function GanaPlayMainApp() {
           const tableGroups = [
             { name: 'En curso', color: '#7c3aed', statuses: ['Pendiente', 'En Proceso', 'Planeando'] as RequestStatus[] },
             { name: 'Cerradas', color: '#00783e', statuses: ['Publicado', 'Denegado'] as RequestStatus[] },
+            { name: 'Declinadas', color: '#9c3838', statuses: ['Declinada'] as RequestStatus[] },
           ];
           const fmtDate = (ds: string) => {
             if (!ds) return '—';
@@ -2092,7 +2284,61 @@ export default function GanaPlayMainApp() {
                     <User size={14} /> Encargado: {selectedReq.assignedTo}
                   </span>
                 )}
+
+                {/* Spacer flexible para empujar acciones destructivas a la derecha */}
+                <div style={{ flex: 1 }} />
+
+                {/* Declinar solicitud — equipo interno autorizado */}
+                {canDecline && selectedReq.status !== "Declinada" && (
+                  <button
+                    onClick={() => { setDeclineModalOpen(selectedReq); setDeclineReason(DECLINE_REASONS[0]); setDeclineComment(""); }}
+                    style={{
+                      padding: '9px 16px', fontSize: '12.5px', fontWeight: 700,
+                      background: 'var(--surface-1)', color: 'var(--warning, #b54708)',
+                      border: '1px solid var(--warning, #b54708)', borderRadius: '10px',
+                      cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px', width: 'auto',
+                    }}
+                  >
+                    <AlertCircle size={14} /> Declinar solicitud
+                  </button>
+                )}
+
+                {/* Eliminar permanentemente — SOLO Trafficker */}
+                {role === "admin" && (
+                  <button
+                    onClick={() => { setDeleteModalOpen(selectedReq); setDeleteConfirmText(""); setDeleteAdminPass(""); }}
+                    style={{
+                      padding: '9px 16px', fontSize: '12.5px', fontWeight: 700,
+                      background: 'var(--danger, #d92d20)', color: '#ffffff',
+                      border: '1px solid var(--danger, #d92d20)', borderRadius: '10px',
+                      cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px', width: 'auto',
+                    }}
+                    title="Solo Trafficker. Elimina solicitud + artes + historial."
+                  >
+                    <Trash2 size={14} /> Eliminar permanentemente
+                  </button>
+                )}
               </div>
+
+              {/* Aviso visible si la solicitud ya está declinada */}
+              {selectedReq.status === "Declinada" && (
+                <div style={{
+                  background: 'var(--surface-1)', border: `1px solid ${STATUS_TEXT_COLORS["Declinada"]}`,
+                  borderLeft: `4px solid ${STATUS_TEXT_COLORS["Declinada"]}`, borderRadius: '10px',
+                  padding: '12px 16px', marginBottom: '20px',
+                }}>
+                  <div style={{ fontSize: '13px', fontWeight: 700, color: STATUS_TEXT_COLORS["Declinada"], marginBottom: '4px' }}>
+                    🚫 Solicitud declinada
+                  </div>
+                  <div style={{ fontSize: '12px', color: 'var(--text-secondary)', lineHeight: 1.5 }}>
+                    <strong>Motivo:</strong> {selectedReq.declineReason || "—"}
+                    {selectedReq.declineComment && <> · <strong>Comentario:</strong> {selectedReq.declineComment}</>}
+                    <br />
+                    <strong>Declinada por:</strong> {selectedReq.declinedBy || "—"}
+                    {selectedReq.declinedAt && <> · <strong>Fecha:</strong> {new Date(selectedReq.declinedAt).toLocaleString('es-ES')}</>}
+                  </div>
+                </div>
+              )}
 
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '24px' }}>
                 {/* Columna izquierda: brief */}
@@ -2365,6 +2611,139 @@ export default function GanaPlayMainApp() {
             <UploadCloud size={32} color="var(--accent-color)" style={{ marginBottom: '12px' }} />
             <div className="loader" style={{ margin: '0 auto 12px' }} />
             <p style={{ margin: 0, fontWeight: 700, color: 'var(--text-primary)' }}>Procesando archivo…</p>
+          </div>
+        </div>
+      )}
+
+      {/* ─── MODAL: ELIMINACIÓN PERMANENTE (solo Trafficker) ─── */}
+      {deleteModalOpen && role === "admin" && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', backdropFilter: 'blur(3px)', zIndex: 200, display: 'flex', justifyContent: 'center', alignItems: 'center', padding: '20px' }}>
+          <div className="card" style={{ maxWidth: '520px', width: '100%', padding: '26px', borderTop: '4px solid var(--danger, #d92d20)' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '14px' }}>
+              <Trash2 size={22} color="var(--danger, #d92d20)" />
+              <h2 style={{ margin: 0, fontSize: '17px', color: 'var(--danger, #d92d20)' }}>Eliminar permanentemente</h2>
+            </div>
+            <p style={{ fontSize: '13px', color: 'var(--text-primary)', lineHeight: 1.6, margin: '0 0 12px' }}>
+              Esta acción eliminará permanentemente la solicitud <strong>{deleteModalOpen.id}</strong> &mdash; &ldquo;{deleteModalOpen.title}&rdquo; &mdash; <strong>y todos sus artes asociados</strong>.
+            </p>
+            <ul style={{ fontSize: '12px', color: 'var(--text-secondary)', lineHeight: 1.7, paddingLeft: '20px', margin: '0 0 18px' }}>
+              <li>No aparecerá en historial funcional, listados ni búsquedas.</li>
+              <li>Los archivos en Storage se borrarán.</li>
+              <li>No podrá recuperarse desde la plataforma.</li>
+              <li>Queda registro de auditoría (sin contenido) con tu nombre y fecha.</li>
+            </ul>
+
+            <div style={{ marginBottom: '12px' }}>
+              <label className="label">Escribe el ID <strong>{deleteModalOpen.id}</strong> para confirmar</label>
+              <input
+                type="text"
+                value={deleteConfirmText}
+                onChange={e => setDeleteConfirmText(e.target.value)}
+                placeholder={deleteModalOpen.id}
+                autoFocus
+              />
+            </div>
+
+            <div style={{ marginBottom: '16px' }}>
+              <label className="label">Contraseña de Trafficker</label>
+              <input
+                type="password"
+                value={deleteAdminPass}
+                onChange={e => setDeleteAdminPass(e.target.value)}
+                placeholder="••••••••••••"
+              />
+              <p style={{ fontSize: '10.5px', color: 'var(--text-muted)', margin: '4px 0 0' }}>
+                Se valida en el servidor antes de borrar (no se guarda en el navegador).
+              </p>
+            </div>
+
+            <div style={{ display: 'flex', gap: '10px', justifyContent: 'flex-end' }}>
+              <button
+                onClick={() => { setDeleteModalOpen(null); setDeleteConfirmText(""); setDeleteAdminPass(""); }}
+                disabled={deleteLoading}
+                style={{
+                  padding: '10px 18px', fontSize: '13px', fontWeight: 600,
+                  background: 'var(--surface-1)', color: 'var(--text-primary)',
+                  border: '1px solid var(--border-color)', borderRadius: '10px', cursor: 'pointer', width: 'auto',
+                }}
+              >Cancelar</button>
+              <button
+                onClick={handleConfirmPermanentDelete}
+                disabled={
+                  deleteLoading ||
+                  deleteConfirmText !== deleteModalOpen.id ||
+                  deleteAdminPass.length === 0
+                }
+                style={{
+                  padding: '10px 18px', fontSize: '13px', fontWeight: 700,
+                  background: 'var(--danger, #d92d20)', color: '#ffffff',
+                  border: '1px solid var(--danger, #d92d20)', borderRadius: '10px',
+                  cursor: deleteLoading ? 'wait' : 'pointer', width: 'auto',
+                  opacity: (deleteConfirmText !== deleteModalOpen.id || deleteAdminPass.length === 0) ? 0.5 : 1,
+                }}
+              >{deleteLoading ? 'Eliminando…' : 'Eliminar permanentemente'}</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ─── MODAL: DECLINAR SOLICITUD (equipo interno) ─── */}
+      {declineModalOpen && canDecline && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', backdropFilter: 'blur(3px)', zIndex: 200, display: 'flex', justifyContent: 'center', alignItems: 'center', padding: '20px' }}>
+          <div className="card" style={{ maxWidth: '500px', width: '100%', padding: '26px', borderTop: `4px solid ${STATUS_TEXT_COLORS["Declinada"]}` }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '14px' }}>
+              <AlertCircle size={22} color={STATUS_TEXT_COLORS["Declinada"]} />
+              <h2 style={{ margin: 0, fontSize: '17px', color: STATUS_TEXT_COLORS["Declinada"] }}>Declinar solicitud</h2>
+            </div>
+            <p style={{ fontSize: '13px', color: 'var(--text-primary)', lineHeight: 1.6, margin: '0 0 14px' }}>
+              <strong>{declineModalOpen.id}</strong> &mdash; &ldquo;{declineModalOpen.title}&rdquo;
+            </p>
+            <p style={{ fontSize: '12px', color: 'var(--text-secondary)', lineHeight: 1.6, margin: '0 0 16px' }}>
+              La solicitud cambiará a estado <strong>Declinada</strong> y saldrá de las vistas activas. Conserva trazabilidad (motivo, usuario y fecha) en historial. No se borra ningún archivo.
+            </p>
+
+            <div style={{ marginBottom: '14px' }}>
+              <label className="label">Motivo</label>
+              <select value={declineReason} onChange={e => setDeclineReason(e.target.value)}>
+                {DECLINE_REASONS.map(r => <option key={r} value={r}>{r}</option>)}
+              </select>
+            </div>
+
+            <div style={{ marginBottom: '18px' }}>
+              <label className="label">
+                Comentario {declineReason === "Otro" ? <span style={{ color: 'var(--danger)' }}>*</span> : <span style={{ color: 'var(--text-muted)', fontWeight: 400 }}>(opcional)</span>}
+              </label>
+              <textarea
+                value={declineComment}
+                onChange={e => setDeclineComment(e.target.value)}
+                placeholder={declineReason === "Otro" ? "Explica el motivo…" : "Detalle opcional…"}
+                rows={3}
+                style={{ width: '100%', resize: 'vertical', fontFamily: 'inherit' }}
+              />
+            </div>
+
+            <div style={{ display: 'flex', gap: '10px', justifyContent: 'flex-end' }}>
+              <button
+                onClick={() => { setDeclineModalOpen(null); setDeclineReason(DECLINE_REASONS[0]); setDeclineComment(""); }}
+                disabled={declineLoading}
+                style={{
+                  padding: '10px 18px', fontSize: '13px', fontWeight: 600,
+                  background: 'var(--surface-1)', color: 'var(--text-primary)',
+                  border: '1px solid var(--border-color)', borderRadius: '10px', cursor: 'pointer', width: 'auto',
+                }}
+              >Cancelar</button>
+              <button
+                onClick={handleConfirmDecline}
+                disabled={declineLoading || (declineReason === "Otro" && !declineComment.trim())}
+                style={{
+                  padding: '10px 18px', fontSize: '13px', fontWeight: 700,
+                  background: STATUS_TEXT_COLORS["Declinada"], color: '#ffffff',
+                  border: `1px solid ${STATUS_TEXT_COLORS["Declinada"]}`, borderRadius: '10px',
+                  cursor: declineLoading ? 'wait' : 'pointer', width: 'auto',
+                  opacity: (declineReason === "Otro" && !declineComment.trim()) ? 0.5 : 1,
+                }}
+              >{declineLoading ? 'Declinando…' : 'Confirmar declinación'}</button>
+            </div>
           </div>
         </div>
       )}
