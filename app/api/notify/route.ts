@@ -39,7 +39,17 @@ type DeliveryPayload = {
   request: { id: string; title: string; status?: string };
 };
 
-type NotifyPayload = NewRequestPayload | DeliveryPayload;
+type DeclinePayload = {
+  type: "decline";
+  to: string;
+  declinedBy: string;
+  reason: string;
+  comment?: string;
+  requesterName?: string;
+  request: { id: string; title: string; status?: string };
+};
+
+type NotifyPayload = NewRequestPayload | DeliveryPayload | DeclinePayload;
 
 const row = (label: string, value: string) =>
   `<p style="margin:0 0 8px;font-size:14px;color:#333333;">
@@ -123,6 +133,32 @@ export async function POST(req: Request) {
       });
       const result = await sendEmail({ to: [to], subject, html });
       console.log(`[notify] delivery ${r.id} → ${to}:`, result.ok ? "enviado" : result.error);
+      return NextResponse.json(result);
+    }
+
+    // ── Declinación de solicitud (avisa al solicitante) ──
+    if (payload.type === "decline") {
+      const { to, request: r, declinedBy, reason, comment, requesterName } = payload;
+      if (!to) {
+        return NextResponse.json({ ok: false, error: "Falta el correo del solicitante." });
+      }
+      const subject = `[GanaPlay Diseño] Solicitud ${r.id} declinada — ${r.title}`;
+      const html = brandEmail({
+        label: "Solicitud declinada",
+        heading: `🚫 ${requesterName ? requesterName + ", tu" : "Tu"} solicitud fue declinada`,
+        bodyHtml:
+          row("Solicitud", `${r.id} — ${r.title}`) +
+          row("Motivo", reason) +
+          (comment ? row("Comentario", comment) : "") +
+          row("Declinada por", declinedBy) +
+          row("Fecha", new Date().toLocaleString("es-ES")) +
+          `<p style="margin:18px 0 4px;font-size:13px;color:#6d6e71;">
+             Si crees que es un error, contacta al equipo. Podés crear una nueva solicitud corrigiendo los puntos señalados.
+           </p>` +
+          ctaButton("Ir a GanaPlay Diseño", `${APP_URL}`),
+      });
+      const result = await sendEmail({ to: [to], subject, html });
+      console.log(`[notify] decline ${r.id} → ${to}:`, result.ok ? "enviado" : result.error);
       return NextResponse.json(result);
     }
 
