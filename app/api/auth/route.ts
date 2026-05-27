@@ -15,25 +15,31 @@ import { checkRateLimit, getClientIp } from "@/lib/rate-limit";
  * Configuradas en Vercel (Production) y en .env.local (Development).
  *
  * Roles:
- *  - admin     → Trafficker. Acceso total.
- *  - cm        → Community Manager. Crea solicitudes, ve calendario.
- *  - operator  → Operadores (Roberto, Quota). Mismos permisos que CM
- *                pero cada uno con su nombre propio. NO accede al panel
- *                interno de diseñadores.
- *  - designer  → Diseñador. Centro de Diseño, entregables, IA Andromeda.
+ *  - admin           → Trafficker. Acceso total + eliminación permanente.
+ *  - cm              → Community Manager. Crea solicitudes, ve calendario.
+ *  - operator        → Operadores (Roberto, Quota, Juan). Mismos permisos
+ *                      que CM pero cada uno con su nombre propio.
+ *  - administrative  → Administrativos (Andres, Sebastian). Mismos permisos
+ *                      que CM/operator, distinto perfil para auditoría.
+ *  - designer        → Diseñador. Centro de Diseño, entregables, IA Andromeda.
+ *
+ * Ninguno de los roles "internos no-admin" (cm, operator, administrative)
+ * accede al panel de diseñadores ni a la eliminación permanente.
  */
 
 const PASS_TRAFFICKER = process.env.AUTH_PASS_TRAFFICKER || "";
 const PASS_GENERAL = process.env.AUTH_PASS_GENERAL || "";
 
 const DESIGNER_USERS = ["Juan David", "Eliana", "Verónica", "Caleb"];
-const OPERATOR_USERS = ["Roberto", "Quota"];
+const OPERATOR_USERS = ["Roberto", "Quota", "Juan"];
+const ADMINISTRATIVE_USERS = ["Andres", "Sebastian"];
 
 type AuthBody = {
-  role?: "admin" | "cm" | "designer" | "operator";
+  role?: "admin" | "cm" | "designer" | "operator" | "administrative";
   password?: string;
   designerName?: string;
   operatorName?: string;
+  administrativeName?: string;
 };
 
 export async function POST(req: Request) {
@@ -62,7 +68,7 @@ export async function POST(req: Request) {
       );
     }
 
-    const { role, password, designerName, operatorName }: AuthBody = await req.json();
+    const { role, password, designerName, operatorName, administrativeName }: AuthBody = await req.json();
 
     if (!role || !password) {
       return NextResponse.json(
@@ -109,6 +115,22 @@ export async function POST(req: Request) {
         );
       }
       return NextResponse.json({ ok: true, role, userName: operatorName });
+    }
+
+    if (role === "administrative") {
+      if (!administrativeName || !ADMINISTRATIVE_USERS.includes(administrativeName)) {
+        return NextResponse.json(
+          { ok: false, error: "Selecciona un administrativo válido." },
+          { status: 400 }
+        );
+      }
+      if (password !== PASS_GENERAL) {
+        return NextResponse.json(
+          { ok: false, error: "Contraseña incorrecta." },
+          { status: 401 }
+        );
+      }
+      return NextResponse.json({ ok: true, role, userName: administrativeName });
     }
 
     if (role === "designer") {

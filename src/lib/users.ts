@@ -27,10 +27,16 @@ export const USER_DIRECTORY: Record<string, string> = {
   "Caleb": "",             // TODO: completar correo del diseñador
   "Roberto": "",           // TODO: completar correo del operador
   "Quota": "",             // TODO: completar correo del operador
+  "Juan": "",              // TODO: completar correo del operador
+  "Andres": "",            // TODO: completar correo del administrativo
+  "Sebastian": "",         // TODO: completar correo del administrativo
 };
 
-/** Lista de operadores válidos (Roberto, Quota) — espejo del backend. */
-export const OPERATOR_USERS = ["Roberto", "Quota"] as const;
+/** Lista de operadores válidos (Roberto, Quota, Juan) — espejo del backend. */
+export const OPERATOR_USERS = ["Roberto", "Quota", "Juan"] as const;
+
+/** Lista de administrativos válidos (Andres, Sebastian) — espejo del backend. */
+export const ADMINISTRATIVE_USERS = ["Andres", "Sebastian"] as const;
 
 /** Correo asociado a un nombre de usuario (cadena vacía si no está registrado). */
 export function emailForUser(name: string): string {
