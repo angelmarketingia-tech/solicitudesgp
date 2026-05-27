@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { checkRateLimit, getClientIp } from "@/lib/rate-limit";
 
 /**
  * Verificación server-side para eliminación permanente de solicitudes.
@@ -76,6 +77,20 @@ async function writeAuditLog(entry: {
 
 export async function POST(req: Request) {
   try {
+    // Rate limit fuerte: 8 intentos por IP por 5 min. Brute force de la pass
+    // de Trafficker queda totalmente impráctico.
+    const ip = getClientIp(req);
+    const rl = checkRateLimit(`admin-delete:${ip}`, { max: 8, windowMs: 300_000 });
+    if (rl.limited) {
+      return NextResponse.json(
+        {
+          ok: false,
+          error: `Demasiados intentos. Espera ${Math.ceil(rl.resetInMs / 60_000)} minutos.`,
+        },
+        { status: 429, headers: { "Retry-After": String(Math.ceil(rl.resetInMs / 1000)) } }
+      );
+    }
+
     const { requestId, adminPass, by }: Body = await req.json();
 
     if (!requestId || typeof requestId !== "string") {

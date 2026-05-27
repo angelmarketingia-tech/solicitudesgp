@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { checkRateLimit, getClientIp } from "@/lib/rate-limit";
 
 /**
  * Validación de acceso del lado del servidor.
@@ -35,6 +36,20 @@ type AuthBody = {
 
 export async function POST(req: Request) {
   try {
+    // Rate limit: 15 intentos por IP por minuto. Suficiente para uso normal
+    // (incluso si alguien teclea mal), bloquea brute force con 1 IP.
+    const ip = getClientIp(req);
+    const rl = checkRateLimit(`auth:${ip}`, { max: 15, windowMs: 60_000 });
+    if (rl.limited) {
+      return NextResponse.json(
+        {
+          ok: false,
+          error: `Demasiados intentos. Espera ${Math.ceil(rl.resetInMs / 1000)}s antes de volver a intentar.`,
+        },
+        { status: 429, headers: { "Retry-After": String(Math.ceil(rl.resetInMs / 1000)) } }
+      );
+    }
+
     const { role, password, designerName, operatorName }: AuthBody = await req.json();
 
     if (!role || !password) {

@@ -14,7 +14,7 @@ import {
 import { db, storage } from '@/lib/firebase';
 import {
   collection, doc, onSnapshot, setDoc, updateDoc, deleteDoc,
-  addDoc, query, orderBy, serverTimestamp, getDocs
+  addDoc, query, orderBy, serverTimestamp, getDocs, limit, limitToLast
 } from 'firebase/firestore';
 import { ref, uploadBytes, getDownloadURL, deleteObject, listAll } from 'firebase/storage';
 import { emailForUser, DEFAULT_TRAFFICKER_EMAIL } from '@/lib/users';
@@ -321,7 +321,9 @@ export default function GanaPlayMainApp() {
       }
     } catch {}
 
-    const qReq = query(collection(db, "requests"), orderBy("deliveryDate", "asc"));
+    // Límite alto: 1000 solicitudes activas/recientes. Suficiente para 12-24 meses
+    // de operación normal del equipo. Cuando se supere, migrar a paginación real.
+    const qReq = query(collection(db, "requests"), orderBy("deliveryDate", "desc"), limit(1000));
     const unsubReq = onSnapshot(qReq, (snap) => {
       const data = snap.docs.map(docSnap => ({ id: docSnap.id, ...docSnap.data() } as RequestType));
       setRequests(data);
@@ -332,7 +334,9 @@ export default function GanaPlayMainApp() {
       setLoadingData(false);
     });
 
-    const qChat = query(collection(db, "team_chat"), orderBy("createdAt", "asc"));
+    // Chat del equipo: solo los últimos 300 mensajes en orden ascendente.
+    // limitToLast preserva el orden cronológico esperado por el render.
+    const qChat = query(collection(db, "team_chat"), orderBy("createdAt", "asc"), limitToLast(300));
     const unsubChat = onSnapshot(qChat, (snap) => {
       const data = snap.docs.map(docSnap => docSnap.data() as DesignerChatMsg);
       setTeamChatContent(data);
@@ -399,7 +403,9 @@ export default function GanaPlayMainApp() {
   useEffect(() => {
     if (!role) return;
     const targetRoleForNotifs = (role === 'admin' || role === 'cm' || role === 'operator') ? 'admin' : 'designer';
-    const qNotif = query(collection(db, "notifications"), orderBy("createdAt", "desc"));
+    // Notificaciones: solo las 100 más recientes. Las viejas siguen en Firestore
+    // (auditoría) pero no se cargan en el panel de la campanita.
+    const qNotif = query(collection(db, "notifications"), orderBy("createdAt", "desc"), limit(100));
     const unsub = onSnapshot(qNotif, (snap) => {
       const all = snap.docs.map(d => ({ id: d.id, ...d.data() } as NotificationItem));
       setFirestoreNotifs(all.filter(n => n.targetRole === targetRoleForNotifs));
@@ -411,7 +417,8 @@ export default function GanaPlayMainApp() {
   useEffect(() => {
     if (!modalOpen || !selectedReq) { setReqMessages([]); return; }
     const reqId = selectedReq.id;
-    const qMsg = query(collection(db, "requests", reqId, "messages"), orderBy("createdAt", "asc"));
+    // Mensajes de la solicitud: últimos 200 en orden cronológico ascendente.
+    const qMsg = query(collection(db, "requests", reqId, "messages"), orderBy("createdAt", "asc"), limitToLast(200));
     const unsub = onSnapshot(qMsg, (snap) => {
       setReqMessages(snap.docs.map(d => ({ id: d.id, ...d.data() } as RequestMessage)));
     }, () => setReqMessages([]));

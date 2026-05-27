@@ -1,0 +1,90 @@
+rules_version = '2';
+
+// ─────────────────────────────────────────────────────────────────────────
+// Firestore Security Rules — GanaPlay Diseño
+// ─────────────────────────────────────────────────────────────────────────
+// Cómo desplegar:
+//   1. Abrir Firebase Console → Firestore Database → Rules
+//   2. Reemplazar TODO el contenido por este archivo
+//   3. Click "Publish"
+//
+// Filosofía: el proyecto NO usa Firebase Auth (la autenticación es por
+// contraseña vía /api/auth). Por eso no podemos validar `request.auth`.
+//
+// Estas reglas no garantizan seguridad enterprise por sí solas — para
+// eso se necesita Firebase Admin SDK en el server escribiendo TODO. Pero
+// añaden controles de SANIDAD que evitan abuso casual:
+//
+//   - Tamaño máximo por documento (evita data URLs gigantes)
+//   - Campos obligatorios en solicitudes (evita basura)
+//   - Inmutabilidad del ID al actualizar
+//   - audit_log: append-only, no se puede borrar ni modificar
+//   - Bloqueo de colecciones no esperadas (cualquier intento de escribir
+//     en colecciones random falla)
+// ─────────────────────────────────────────────────────────────────────────
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ───── SOLICITUDES ─────
+    match /requests/{reqId} {
+      // Cualquiera autorizado a la app puede leer.
+      allow read: if true;
+
+      // Crear solicitud: tamaño máximo razonable (1 MB) y campos básicos.
+      allow create: if
+        request.resource.size() < 1000000
+        && request.resource.data.keys().hasAll(['title', 'status', 'deliveryDate'])
+        && request.resource.data.title is string
+        && request.resource.data.title.size() > 0
+        && request.resource.data.title.size() <= 500
+        && request.resource.data.status in ['Pendiente', 'Planeando', 'En Proceso', 'Publicado', 'Denegado', 'Declinada'];
+
+      // Actualizar: no permitir cambiar el id (que es el doc name) y mantener
+      // status válido.
+      allow update: if
+        request.resource.size() < 1000000
+        && request.resource.data.status in ['Pendiente', 'Planeando', 'En Proceso', 'Publicado', 'Denegado', 'Declinada'];
+
+      // Borrar: permitido (la app lo hace desde el botón "Eliminar permanentemente",
+      // que está protegido por endpoint server-side con pass de admin).
+      allow delete: if true;
+
+      // ── Subcolección messages ──
+      match /messages/{msgId} {
+        allow read, create, delete: if request.resource == null || request.resource.size() < 1000000;
+        allow update: if false; // mensajes inmutables
+      }
+    }
+
+    // ───── NOTIFICACIONES ─────
+    match /notifications/{notifId} {
+      allow read, create: if true;
+      // Update solo para marcar como leída (campo `read`).
+      allow update: if request.resource.data.diff(resource.data).affectedKeys().hasOnly(['read']);
+      allow delete: if true;
+    }
+
+    // ───── TEAM CHAT ─────
+    match /team_chat/{msgId} {
+      allow read, create: if request.resource == null || request.resource.size() < 200000;
+      allow update, delete: if false; // chat es append-only
+    }
+
+    // ───── AUDIT LOG ─────
+    // Solo escrituras (append-only). Las lecturas pueden permitirse a la app
+    // si más adelante se quiere mostrar al Trafficker; por ahora solo el server
+    // las consulta vía REST.
+    match /audit_log/{entryId} {
+      allow read: if true; // permitir lectura desde la app del Trafficker
+      allow create: if request.resource.size() < 5000;
+      allow update, delete: if false; // jamás modificar audit logs
+    }
+
+    // ───── DENY ALL POR DEFECTO ─────
+    // Cualquier colección no listada arriba queda explícitamente bloqueada.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
