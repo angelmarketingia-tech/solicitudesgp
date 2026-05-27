@@ -222,8 +222,8 @@ export default function GanaPlayMainApp() {
 
   // ── Modales de eliminación / declinación ──
   const [deleteModalOpen, setDeleteModalOpen] = useState<RequestType | null>(null);
-  const [deleteConfirmText, setDeleteConfirmText] = useState("");
   const [deleteAdminPass, setDeleteAdminPass] = useState("");
+  const [deleteShowPass, setDeleteShowPass] = useState(false);
   const [deleteLoading, setDeleteLoading] = useState(false);
 
   const [declineModalOpen, setDeclineModalOpen] = useState<RequestType | null>(null);
@@ -957,31 +957,64 @@ export default function GanaPlayMainApp() {
       return m ? m[1].toLowerCase() : '';
     };
 
+    // Calcular nombre base y extensión PRIMERO (sin tocar la URL todavía).
+    let ext = extractExt(creative.type || '');
+    if (!ext) ext = extractExt(creative.url.split('?')[0]);
+    if (!ext && creative.url.startsWith('data:')) {
+      ext = MIME_TO_EXT[extractMimeFromDataUrl(creative.url)] || '';
+    }
+    const originalName = (creative.type || '').replace(/\.[a-zA-Z0-9]+$/, '');
+    const safeOriginal = originalName.replace(/[^a-zA-Z0-9._-]/g, '_');
+    const baseName = safeOriginal || `${reqId}_${dim.replace(/\s/g, '_')}`;
+
     try {
-      const response = await fetch(creative.url);
-      if (!response.ok) throw new Error("No se pudo obtener el archivo.");
-      const blob = await response.blob();
-      const objectUrl = URL.createObjectURL(blob);
+      const isDataUrl = creative.url.startsWith('data:');
+      const isFirebase =
+        creative.url.startsWith('https://firebasestorage.googleapis.com/') ||
+        creative.url.startsWith('https://storage.googleapis.com/') ||
+        creative.url.includes('.firebasestorage.app/');
 
-      // 1. nombre original guardado al subir (creative.type contiene el filename)
-      let ext = extractExt(creative.type || '');
-      // 2. URL pública (Firebase Storage suele tener filename con ext en la URL)
-      if (!ext) ext = extractExt(creative.url.split('?')[0]);
-      // 3. data URL → MIME explícito
-      if (!ext && creative.url.startsWith('data:')) {
-        ext = MIME_TO_EXT[extractMimeFromDataUrl(creative.url)] || '';
+      if (isDataUrl) {
+        // Data URLs (fallback Firestore): manejo local sin red.
+        const response = await fetch(creative.url);
+        const blob = await response.blob();
+        if (!ext) ext = MIME_TO_EXT[(blob.type || '').toLowerCase()] || 'bin';
+        const filename = `${baseName}.${ext}`;
+        const objectUrl = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = objectUrl;
+        link.download = filename;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        URL.revokeObjectURL(objectUrl);
+        addToast(`Descarga iniciada (${ext.toUpperCase()}).`, 'success');
+        return;
       }
-      // 4. MIME del blob real
-      if (!ext) ext = MIME_TO_EXT[(blob.type || '').toLowerCase()] || '';
-      // 5. último recurso (NO asumimos jpg — preservamos como binario)
-      if (!ext) ext = 'bin';
 
-      // Nombre base: usar el nombre original (sin extensión) si lo tenemos.
-      const originalName = (creative.type || '').replace(/\.[a-zA-Z0-9]+$/, '');
-      const safeOriginal = originalName.replace(/[^a-zA-Z0-9._-]/g, '_');
-      const baseName = safeOriginal || `${reqId}_${dim.replace(/\s/g, '_')}`;
+      if (isFirebase) {
+        // Firebase Storage: usar el proxy server-side para evitar CORS.
+        // El proxy fuerza Content-Disposition: attachment y preserva filename.
+        if (!ext) ext = 'bin';
+        const filename = `${baseName}.${ext}`;
+        const proxyUrl = `/api/download?url=${encodeURIComponent(creative.url)}&name=${encodeURIComponent(filename)}`;
+        const link = document.createElement('a');
+        link.href = proxyUrl;
+        link.download = filename;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        addToast(`Descarga iniciada (${ext.toUpperCase()}).`, 'success');
+        return;
+      }
+
+      // Otras URLs: intentar fetch+blob (puede fallar por CORS, pero igual probamos).
+      const response = await fetch(creative.url);
+      if (!response.ok) throw new Error(`Servidor respondió ${response.status}.`);
+      const blob = await response.blob();
+      if (!ext) ext = MIME_TO_EXT[(blob.type || '').toLowerCase()] || 'bin';
       const filename = `${baseName}.${ext}`;
-
+      const objectUrl = URL.createObjectURL(blob);
       const link = document.createElement('a');
       link.href = objectUrl;
       link.download = filename;
@@ -991,7 +1024,8 @@ export default function GanaPlayMainApp() {
       URL.revokeObjectURL(objectUrl);
       addToast(`Descarga iniciada (${ext.toUpperCase()}).`, 'success');
     } catch (err: unknown) {
-      addToast("Error al descargar: " + (err instanceof Error ? err.message : ""), 'error');
+      const msg = err instanceof Error ? err.message : 'desconocido';
+      addToast(`Error al descargar: ${msg}. Probá abrir la imagen y guardar con clic derecho.`, 'error');
     }
   };
 
@@ -1061,22 +1095,20 @@ export default function GanaPlayMainApp() {
       return;
     }
     const req = deleteModalOpen;
-    if (deleteConfirmText !== req.id) {
-      addToast(`Escribe ${req.id} para confirmar.`, 'error');
-      return;
-    }
-    if (!deleteAdminPass) {
+    // .trim() limpia espacios/saltos invisibles que el navegador suele pegar
+    // junto con la pass desde el autocompletar o copy/paste, lo que causaba 403.
+    const cleanPass = deleteAdminPass.trim();
+    if (!cleanPass) {
       addToast("Ingresa tu contraseña de Trafficker.", 'error');
       return;
     }
     setDeleteLoading(true);
     try {
-      await performPermanentDelete(req, deleteAdminPass);
+      await performPermanentDelete(req, cleanPass);
       addToast(`Solicitud ${req.id} eliminada permanentemente.`, 'success');
-      // Cerrar todo y limpiar selección
       setDeleteModalOpen(null);
-      setDeleteConfirmText("");
       setDeleteAdminPass("");
+      setDeleteShowPass(false);
       if (selectedReq?.id === req.id) {
         setSelectedReq(null);
         setModalOpen(false);
@@ -2306,7 +2338,7 @@ export default function GanaPlayMainApp() {
                 {/* Eliminar permanentemente — SOLO Trafficker */}
                 {role === "admin" && (
                   <button
-                    onClick={() => { setDeleteModalOpen(selectedReq); setDeleteConfirmText(""); setDeleteAdminPass(""); }}
+                    onClick={() => { setDeleteModalOpen(selectedReq); setDeleteAdminPass(""); setDeleteShowPass(false); }}
                     style={{
                       padding: '9px 16px', fontSize: '12.5px', fontWeight: 700,
                       background: 'var(--danger, #d92d20)', color: '#ffffff',
@@ -2633,33 +2665,43 @@ export default function GanaPlayMainApp() {
               <li>Queda registro de auditoría (sin contenido) con tu nombre y fecha.</li>
             </ul>
 
-            <div style={{ marginBottom: '12px' }}>
-              <label className="label">Escribe el ID <strong>{deleteModalOpen.id}</strong> para confirmar</label>
-              <input
-                type="text"
-                value={deleteConfirmText}
-                onChange={e => setDeleteConfirmText(e.target.value)}
-                placeholder={deleteModalOpen.id}
-                autoFocus
-              />
-            </div>
-
             <div style={{ marginBottom: '16px' }}>
               <label className="label">Contraseña de Trafficker</label>
-              <input
-                type="password"
-                value={deleteAdminPass}
-                onChange={e => setDeleteAdminPass(e.target.value)}
-                placeholder="••••••••••••"
-              />
-              <p style={{ fontSize: '10.5px', color: 'var(--text-muted)', margin: '4px 0 0' }}>
-                Se valida en el servidor antes de borrar (no se guarda en el navegador).
+              <div style={{ position: 'relative' }}>
+                <input
+                  type={deleteShowPass ? "text" : "password"}
+                  value={deleteAdminPass}
+                  onChange={e => setDeleteAdminPass(e.target.value)}
+                  placeholder="Tu contraseña de admin"
+                  autoFocus
+                  autoComplete="off"
+                  spellCheck={false}
+                  style={{ paddingRight: '64px' }}
+                  onKeyDown={e => {
+                    if (e.key === 'Enter' && !deleteLoading && deleteAdminPass.trim()) {
+                      e.preventDefault();
+                      handleConfirmPermanentDelete();
+                    }
+                  }}
+                />
+                <button
+                  type="button"
+                  onClick={() => setDeleteShowPass(v => !v)}
+                  style={{
+                    position: 'absolute', right: '6px', top: '50%', transform: 'translateY(-50%)',
+                    background: 'transparent', border: 'none', color: 'var(--text-secondary)',
+                    fontSize: '11px', fontWeight: 600, cursor: 'pointer', padding: '4px 8px', width: 'auto',
+                  }}
+                >{deleteShowPass ? 'Ocultar' : 'Mostrar'}</button>
+              </div>
+              <p style={{ fontSize: '10.5px', color: 'var(--text-muted)', margin: '6px 0 0' }}>
+                Se valida en el servidor (no se guarda en el navegador). Los espacios al inicio/final se ignoran.
               </p>
             </div>
 
             <div style={{ display: 'flex', gap: '10px', justifyContent: 'flex-end' }}>
               <button
-                onClick={() => { setDeleteModalOpen(null); setDeleteConfirmText(""); setDeleteAdminPass(""); }}
+                onClick={() => { setDeleteModalOpen(null); setDeleteAdminPass(""); setDeleteShowPass(false); }}
                 disabled={deleteLoading}
                 style={{
                   padding: '10px 18px', fontSize: '13px', fontWeight: 600,
@@ -2669,17 +2711,13 @@ export default function GanaPlayMainApp() {
               >Cancelar</button>
               <button
                 onClick={handleConfirmPermanentDelete}
-                disabled={
-                  deleteLoading ||
-                  deleteConfirmText !== deleteModalOpen.id ||
-                  deleteAdminPass.length === 0
-                }
+                disabled={deleteLoading || deleteAdminPass.trim().length === 0}
                 style={{
                   padding: '10px 18px', fontSize: '13px', fontWeight: 700,
                   background: 'var(--danger, #d92d20)', color: '#ffffff',
                   border: '1px solid var(--danger, #d92d20)', borderRadius: '10px',
                   cursor: deleteLoading ? 'wait' : 'pointer', width: 'auto',
-                  opacity: (deleteConfirmText !== deleteModalOpen.id || deleteAdminPass.length === 0) ? 0.5 : 1,
+                  opacity: deleteAdminPass.trim().length === 0 ? 0.5 : 1,
                 }}
               >{deleteLoading ? 'Eliminando…' : 'Eliminar permanentemente'}</button>
             </div>
