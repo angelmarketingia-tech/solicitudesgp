@@ -75,11 +75,17 @@ const PROFILE_DEFAULTS: Record<string, { area: string; requesterName: string }> 
   admin:    { area: "Pauta",          requesterName: "Trafficker" },
   cm:       { area: "Redes Sociales", requesterName: "Community Manager" },
   designer: { area: "Redes Sociales", requesterName: "" },
+  operator: { area: "Pauta",          requesterName: "" },
 };
 
 // ─── Diseñadores del sistema ───
 // Las contraseñas NO viven aquí: se validan en el servidor vía /api/auth.
 const DESIGNER_USERS = ["Juan David", "Eliana", "Verónica", "Caleb"];
+
+// ─── Operadores (Roberto, Quota) ───
+// Perfiles con mismos permisos que CM pero cada uno con su nombre propio.
+// NO acceden al panel interno de diseñadores ni a la IA Andromeda.
+const OPERATOR_USER_LIST = ["Roberto", "Quota"];
 
 type RequestStatus = "Publicado" | "Denegado" | "En Proceso" | "Planeando" | "Pendiente";
 type RequestPriority = "Bajo" | "Medio" | "Alto" | "Urgente";
@@ -175,8 +181,8 @@ type NotificationItem = {
 };
 
 export default function GanaPlayMainApp() {
-  const [role, setRole] = useState<"admin" | "cm" | "designer" | null>(() => {
-    try { return (sessionStorage.getItem('gp_role') as "admin" | "cm" | "designer" | null) || null; } catch { return null; }
+  const [role, setRole] = useState<"admin" | "cm" | "designer" | "operator" | null>(() => {
+    try { return (sessionStorage.getItem('gp_role') as "admin" | "cm" | "designer" | "operator" | null) || null; } catch { return null; }
   });
   const [userName, setUserName] = useState<string>(() => {
     try { return sessionStorage.getItem('gp_userName') || ''; } catch { return ''; }
@@ -193,8 +199,9 @@ export default function GanaPlayMainApp() {
   const [loadingData, setLoadingData] = useState(true);
 
   // ── Login ──
-  const [loginRole, setLoginRole] = useState<"admin" | "cm" | "designer" | null>(null);
+  const [loginRole, setLoginRole] = useState<"admin" | "cm" | "designer" | "operator" | null>(null);
   const [loginDesignerName, setLoginDesignerName] = useState("");
+  const [loginOperatorName, setLoginOperatorName] = useState("");
   const [loginPass, setLoginPass] = useState("");
   const [loginError, setLoginError] = useState("");
   const [loginLoading, setLoginLoading] = useState(false);
@@ -363,7 +370,7 @@ export default function GanaPlayMainApp() {
 
   useEffect(() => {
     if (!role) return;
-    const targetRoleForNotifs = (role === 'admin' || role === 'cm') ? 'admin' : 'designer';
+    const targetRoleForNotifs = (role === 'admin' || role === 'cm' || role === 'operator') ? 'admin' : 'designer';
     const qNotif = query(collection(db, "notifications"), orderBy("createdAt", "desc"));
     const unsub = onSnapshot(qNotif, (snap) => {
       const all = snap.docs.map(d => ({ id: d.id, ...d.data() } as NotificationItem));
@@ -889,23 +896,72 @@ export default function GanaPlayMainApp() {
   };
 
   const handleDownload = async (creative: Creative, reqId: string, dim: string) => {
+    // Preserva el formato ORIGINAL del archivo subido. Orden de prioridad para
+    // detectar la extensión real:
+    //   1. La extensión del nombre original guardado en creative.type
+    //      (el campo `type` se usa para guardar el filename original al subir).
+    //   2. La extensión del último segmento de la URL.
+    //   3. El MIME type del blob descargado.
+    //   4. Última opción: "bin" (NO asumir jpg — eso corrompía PDFs/ZIP/etc.).
+    const MIME_TO_EXT: Record<string, string> = {
+      'image/jpeg': 'jpg',
+      'image/jpg': 'jpg',
+      'image/png': 'png',
+      'image/webp': 'webp',
+      'image/gif': 'gif',
+      'image/svg+xml': 'svg',
+      'application/pdf': 'pdf',
+      'application/zip': 'zip',
+      'application/x-zip-compressed': 'zip',
+      'application/postscript': 'ai',
+      'application/illustrator': 'ai',
+      'image/vnd.adobe.photoshop': 'psd',
+      'application/octet-stream': '',
+      'video/mp4': 'mp4',
+      'video/quicktime': 'mov',
+    };
+    const extractExt = (str: string): string => {
+      const m = str.match(/\.([a-zA-Z0-9]+)(\?|$)/);
+      return m ? m[1].toLowerCase() : '';
+    };
+    const extractMimeFromDataUrl = (url: string): string => {
+      const m = url.match(/^data:([^;,]+)[;,]/);
+      return m ? m[1].toLowerCase() : '';
+    };
+
     try {
       const response = await fetch(creative.url);
       if (!response.ok) throw new Error("No se pudo obtener el archivo.");
       const blob = await response.blob();
       const objectUrl = URL.createObjectURL(blob);
-      const urlPath = creative.url.split('?')[0];
-      const lastSegment = urlPath.split('/').pop() ?? '';
-      const extMatch = lastSegment.match(/\.([a-zA-Z0-9]+)$/);
-      const ext = extMatch ? extMatch[1].toLowerCase() : 'jpg';
+
+      // 1. nombre original guardado al subir (creative.type contiene el filename)
+      let ext = extractExt(creative.type || '');
+      // 2. URL pública (Firebase Storage suele tener filename con ext en la URL)
+      if (!ext) ext = extractExt(creative.url.split('?')[0]);
+      // 3. data URL → MIME explícito
+      if (!ext && creative.url.startsWith('data:')) {
+        ext = MIME_TO_EXT[extractMimeFromDataUrl(creative.url)] || '';
+      }
+      // 4. MIME del blob real
+      if (!ext) ext = MIME_TO_EXT[(blob.type || '').toLowerCase()] || '';
+      // 5. último recurso (NO asumimos jpg — preservamos como binario)
+      if (!ext) ext = 'bin';
+
+      // Nombre base: usar el nombre original (sin extensión) si lo tenemos.
+      const originalName = (creative.type || '').replace(/\.[a-zA-Z0-9]+$/, '');
+      const safeOriginal = originalName.replace(/[^a-zA-Z0-9._-]/g, '_');
+      const baseName = safeOriginal || `${reqId}_${dim.replace(/\s/g, '_')}`;
+      const filename = `${baseName}.${ext}`;
+
       const link = document.createElement('a');
       link.href = objectUrl;
-      link.download = `${reqId}_${dim.replace(/\s/g, '_')}.${ext}`;
+      link.download = filename;
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
       URL.revokeObjectURL(objectUrl);
-      addToast("Descarga iniciada.", 'success');
+      addToast(`Descarga iniciada (${ext.toUpperCase()}).`, 'success');
     } catch (err: unknown) {
       addToast("Error al descargar: " + (err instanceof Error ? err.message : ""), 'error');
     }
@@ -984,6 +1040,10 @@ export default function GanaPlayMainApp() {
       setLoginError("Selecciona tu nombre.");
       return;
     }
+    if (loginRole === "operator" && !loginOperatorName) {
+      setLoginError("Selecciona tu nombre.");
+      return;
+    }
     if (!loginPass) {
       setLoginError("Ingresa la contraseña.");
       return;
@@ -993,7 +1053,12 @@ export default function GanaPlayMainApp() {
       const res = await fetch("/api/auth", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ role: loginRole, password: loginPass, designerName: loginDesignerName }),
+        body: JSON.stringify({
+          role: loginRole,
+          password: loginPass,
+          designerName: loginDesignerName,
+          operatorName: loginOperatorName,
+        }),
       });
       const data = await res.json();
       if (!res.ok || !data.ok) {
@@ -1013,10 +1078,10 @@ export default function GanaPlayMainApp() {
     } finally {
       setLoginLoading(false);
     }
-  }, [loginRole, loginPass, loginDesignerName]);
+  }, [loginRole, loginPass, loginDesignerName, loginOperatorName]);
 
   const handleLogout = () => {
-    setRole(null); setUserName(""); setLoginPass(""); setLoginDesignerName("");
+    setRole(null); setUserName(""); setLoginPass(""); setLoginDesignerName(""); setLoginOperatorName("");
     setLoginError(""); setLoginRole(null); setActiveTab('Tablero Kanban');
     setNotifPanelOpen(false);
     try {
@@ -1049,7 +1114,7 @@ export default function GanaPlayMainApp() {
   }, [requests]);
 
   const allNotifications = useMemo<NotificationItem[]>(() => {
-    const targetRoleForNotifs = (role === 'admin' || role === 'cm') ? 'admin' : 'designer';
+    const targetRoleForNotifs = (role === 'admin' || role === 'cm' || role === 'operator') ? 'admin' : 'designer';
     const myAlerts = deadlineAlerts.filter(a => a.targetRole === targetRoleForNotifs);
     return [...myAlerts, ...firestoreNotifs];
   }, [deadlineAlerts, firestoreNotifs, role]);
@@ -1073,6 +1138,7 @@ export default function GanaPlayMainApp() {
     const ROLE_CARDS = [
       { key: 'admin',    icon: '⚡', label: 'Trafficker',         sub: 'Gestión total' },
       { key: 'cm',       icon: '🌐', label: 'Community Manager',  sub: 'Redes y contenido' },
+      { key: 'operator', icon: '👤', label: 'Operador',           sub: 'Roberto · Quota' },
       { key: 'designer', icon: '✦',  label: 'Diseñador',          sub: 'Equipo creativo' },
     ];
     const selectedCard = ROLE_CARDS.find(c => c.key === loginRole);
@@ -1092,12 +1158,12 @@ export default function GanaPlayMainApp() {
 
           <div style={{ marginBottom: '20px' }}>
             <p style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '1.5px', textAlign: 'center', marginBottom: '12px' }}>Selecciona tu rol</p>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '10px' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '10px' }}>
               {ROLE_CARDS.map(card => {
                 const active = loginRole === card.key;
                 return (
                   <div key={card.key}
-                    onClick={() => { setLoginRole(card.key as "admin" | "cm" | "designer"); setLoginPass(''); setLoginDesignerName(''); setLoginError(''); }}
+                    onClick={() => { setLoginRole(card.key as "admin" | "cm" | "designer" | "operator"); setLoginPass(''); setLoginDesignerName(''); setLoginOperatorName(''); setLoginError(''); }}
                     style={{
                       background: active ? 'var(--accent-soft)' : 'var(--panel-bg)',
                       border: `1.5px solid ${active ? 'var(--accent-color)' : 'var(--border-color)'}`,
@@ -1131,6 +1197,16 @@ export default function GanaPlayMainApp() {
                   <select value={loginDesignerName} onChange={e => setLoginDesignerName(e.target.value)}>
                     <option value="">— Selecciona tu nombre —</option>
                     {DESIGNER_USERS.map(u => <option key={u} value={u}>{u}</option>)}
+                  </select>
+                </div>
+              )}
+
+              {loginRole === 'operator' && (
+                <div style={{ marginBottom: '14px' }}>
+                  <label className="label">Tu nombre</label>
+                  <select value={loginOperatorName} onChange={e => setLoginOperatorName(e.target.value)}>
+                    <option value="">— Selecciona tu nombre —</option>
+                    {OPERATOR_USER_LIST.map(u => <option key={u} value={u}>{u}</option>)}
                   </select>
                 </div>
               )}
@@ -1183,7 +1259,13 @@ export default function GanaPlayMainApp() {
           <div style={{ minWidth: 0 }}>
             <div style={{ fontWeight: 800, fontSize: '17px', color: 'var(--text-primary)', whiteSpace: 'nowrap' }}>GanaPlay Diseño</div>
             <div style={{ fontSize: '11px', color: 'var(--text-secondary)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-              {role === 'admin' ? '⚡ Trafficker' : role === 'cm' ? '🌐 Community Manager' : `✦ ${userName}`}
+              {role === 'admin'
+                ? '⚡ Trafficker'
+                : role === 'cm'
+                ? '🌐 Community Manager'
+                : role === 'operator'
+                ? `👤 ${userName}`
+                : `✦ ${userName}`}
             </div>
           </div>
         </div>
@@ -1223,7 +1305,7 @@ export default function GanaPlayMainApp() {
         <div style={{ display: 'flex', gap: '6px', marginBottom: '22px', borderBottom: '1px solid var(--border-color)', paddingBottom: '14px', flexWrap: 'wrap' }}>
           <div style={navItemStyle(activeTab === 'Tablero Kanban')} onClick={() => setActiveTab('Tablero Kanban')}><Calendar size={15} /> Planeación</div>
           <div style={navItemStyle(activeTab === 'Calendario Entrega')} onClick={() => setActiveTab('Calendario Entrega')}><Layout size={15} /> Por estado</div>
-          {(role === 'admin' || role === 'cm') && (
+          {(role === 'admin' || role === 'cm' || role === 'operator') && (
             <div style={{ ...navItemStyle(activeTab === 'Pendientes'), position: 'relative' }} onClick={() => setActiveTab('Pendientes')}>
               <AlertCircle size={15} /> Pendientes
               {requests.filter(r => r.status === 'Pendiente').length > 0 && (
@@ -1265,7 +1347,7 @@ export default function GanaPlayMainApp() {
                     <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: colColor }} />
                     <span style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)' }}>{col.title} <span style={{ color: colColor, marginLeft: '4px' }}>{colCards.length}</span></span>
                   </div>
-                  {(role === 'admin' || role === 'cm') && col.id === 'Pendiente' && (
+                  {(role === 'admin' || role === 'cm' || role === 'operator') && col.id === 'Pendiente' && (
                     <div style={{ cursor: 'pointer', padding: '11px 14px', borderRadius: '10px', border: '1px dashed var(--accent-color)', display: 'flex', alignItems: 'center', gap: '8px', color: 'var(--accent-color)', fontSize: '13px', fontWeight: 600, background: 'var(--accent-soft)' }}
                       onClick={() => setCreateModalOpen(true)}>
                       <Plus size={16} /> Nueva solicitud
@@ -1375,7 +1457,7 @@ export default function GanaPlayMainApp() {
                             {(c.priority === 'Alto' || c.priority === 'Urgente') && <div style={{ fontSize: '8px', color: 'var(--danger)', fontWeight: 700, marginTop: '2px' }}>⚡ {c.priority.toUpperCase()}</div>}
                           </div>
                         ))}
-                        {(role === 'admin' || role === 'cm') && cards.length === 0 && (
+                        {(role === 'admin' || role === 'cm' || role === 'operator') && cards.length === 0 && (
                           <div title="Agregar solicitud en este día" style={{ opacity: 0.4, cursor: 'pointer', textAlign: 'center', fontSize: '16px', color: 'var(--accent-color)' }}
                             onClick={() => { setDeliveryDate(day.dateStr); setCreateModalOpen(true); }}>+</div>
                         )}
@@ -1557,7 +1639,7 @@ export default function GanaPlayMainApp() {
                               {creative.aiEvaluation && (
                                 <span className={`badge badge-${creative.aiEvaluation.color}`} style={{ fontSize: '10px' }}>{creative.aiEvaluation.rating}/10</span>
                               )}
-                              {(role === 'admin' || role === 'cm') && (
+                              {(role === 'admin' || role === 'cm' || role === 'operator') && (
                                 <button className="btn-secondary" style={{ padding: '5px 10px', fontSize: '11px', width: '100%', borderRadius: '8px', cursor: 'pointer' }}
                                   onClick={() => handleDownload(creative, req.id, creative.type)}>
                                   <Download size={12} /> Descargar
@@ -1667,7 +1749,7 @@ export default function GanaPlayMainApp() {
                           </div>
                         );
                       })}
-                      {(role === 'admin' || role === 'cm') && (
+                      {(role === 'admin' || role === 'cm' || role === 'operator') && (
                         <div style={{ display: 'grid', gridTemplateColumns: gridCols, minWidth: '930px', cursor: 'pointer' }} onClick={() => setCreateModalOpen(true)}>
                           <div style={cell()} />
                           <div style={{ ...cell({ color: 'var(--accent-color)', gap: '6px', fontWeight: 600 }), gridColumn: 'span 8' }}>
@@ -1992,7 +2074,7 @@ export default function GanaPlayMainApp() {
                     Estado: {selectedReq.status}
                   </span>
                 )}
-                {(role === 'admin' || role === 'cm') ? (
+                {(role === 'admin' || role === 'cm' || role === 'operator') ? (
                   <select value={selectedReq.priority ?? 'Medio'} onChange={handleChangePriority}
                     style={{ width: 'auto', background: priorityConfig[selectedReq.priority ?? 'Medio'].bg, color: priorityConfig[selectedReq.priority ?? 'Medio'].text, fontWeight: 700, border: `1px solid ${priorityConfig[selectedReq.priority ?? 'Medio'].text}` }}>
                     {(["Bajo", "Medio", "Alto", "Urgente"] as RequestPriority[]).map(p => <option key={p} value={p}>{p}</option>)}

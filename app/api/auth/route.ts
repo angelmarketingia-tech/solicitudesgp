@@ -9,23 +9,33 @@ import { NextResponse } from "next/server";
  *
  * Variables soportadas:
  *  - AUTH_PASS_TRAFFICKER  → acceso del Trafficker (rol admin)
- *  - AUTH_PASS_GENERAL     → acceso de Community Manager y Diseñadores
+ *  - AUTH_PASS_GENERAL     → acceso de Community Manager, Operadores y Diseñadores
+ *
+ * Roles:
+ *  - admin     → Trafficker. Acceso total.
+ *  - cm        → Community Manager. Crea solicitudes, ve calendario.
+ *  - operator  → Operadores (Roberto, Quota). Mismos permisos que CM
+ *                pero cada uno con su nombre propio. NO accede al panel
+ *                interno de diseñadores.
+ *  - designer  → Diseñador. Centro de Diseño, entregables, IA Andromeda.
  */
 
 const PASS_TRAFFICKER = process.env.AUTH_PASS_TRAFFICKER || "angel2026";
 const PASS_GENERAL = process.env.AUTH_PASS_GENERAL || "ganaplay2026";
 
 const DESIGNER_USERS = ["Juan David", "Eliana", "Verónica", "Caleb"];
+const OPERATOR_USERS = ["Roberto", "Quota"];
 
 type AuthBody = {
-  role?: "admin" | "cm" | "designer";
+  role?: "admin" | "cm" | "designer" | "operator";
   password?: string;
   designerName?: string;
+  operatorName?: string;
 };
 
 export async function POST(req: Request) {
   try {
-    const { role, password, designerName }: AuthBody = await req.json();
+    const { role, password, designerName, operatorName }: AuthBody = await req.json();
 
     if (!role || !password) {
       return NextResponse.json(
@@ -56,6 +66,22 @@ export async function POST(req: Request) {
         role,
         userName: "Community Manager",
       });
+    }
+
+    if (role === "operator") {
+      if (!operatorName || !OPERATOR_USERS.includes(operatorName)) {
+        return NextResponse.json(
+          { ok: false, error: "Selecciona un operador válido." },
+          { status: 400 }
+        );
+      }
+      if (password !== PASS_GENERAL) {
+        return NextResponse.json(
+          { ok: false, error: "Contraseña incorrecta." },
+          { status: 401 }
+        );
+      }
+      return NextResponse.json({ ok: true, role, userName: operatorName });
     }
 
     if (role === "designer") {
