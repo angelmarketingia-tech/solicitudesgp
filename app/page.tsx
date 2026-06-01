@@ -227,6 +227,11 @@ export default function GanaPlayMainApp() {
   const [loginOperatorName, setLoginOperatorName] = useState("");
   const [loginAdministrativeName, setLoginAdministrativeName] = useState("");
 
+  // ── Lightbox para imágenes (referencia, comentarios, entregables) ──
+  // Soluciona el bug de window.open(dataURL) que el navegador bloquea
+  // como medida de seguridad (página en blanco).
+  const [lightboxImage, setLightboxImage] = useState<{ url: string; filename: string } | null>(null);
+
   // ── Modales de eliminación / declinación ──
   const [deleteModalOpen, setDeleteModalOpen] = useState<RequestType | null>(null);
   const [deleteAdminPass, setDeleteAdminPass] = useState("");
@@ -599,6 +604,20 @@ export default function GanaPlayMainApp() {
       await updateDoc(doc(db, "requests", selectedReq.id), { status: newStatus, history: newHistory, updatedAt: serverTimestamp() });
       setSelectedReq({ ...selectedReq, status: newStatus, history: newHistory });
       await createNotification('status_change', '🔄 Cambio de estado', `${selectedReq.id} "${selectedReq.title}" → ${newStatus} (por ${userName})`, 'admin', selectedReq.id);
+
+      // Cuando el diseñador marca la solicitud como Publicado (cierre final),
+      // el solicitante recibe email de confirmación. No bloquea el flujo.
+      if (newStatus === 'Publicado' && selectedReq.requesterEmail) {
+        sendEmailAlert({
+          type: 'delivery',
+          to: selectedReq.requesterEmail,
+          request: { id: selectedReq.id, title: selectedReq.title, status: 'Publicado' },
+          designer: userName,
+          pieceType: 'Solicitud finalizada y publicada',
+          requesterName: selectedReq.requesterName || '',
+          deliveryDate: selectedReq.deliveryDate || '',
+        });
+      }
     } catch (err: unknown) {
       console.error(err);
       addToast("No se pudo cambiar el estado.", 'error');
@@ -1041,6 +1060,65 @@ export default function GanaPlayMainApp() {
       const msg = err instanceof Error ? err.message : 'desconocido';
       addToast(`Error al descargar: ${msg}. Probá abrir la imagen y guardar con clic derecho.`, 'error');
     }
+  };
+
+  // Descarga genérica: maneja data URLs (Firestore) y URLs (Storage vía proxy).
+  // Usada por el lightbox y por el botón de descarga de imagen de referencia.
+  const downloadImageByUrl = useCallback(async (url: string, filename: string) => {
+    try {
+      if (url.startsWith('data:')) {
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = filename;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+      } else if (
+        url.startsWith('https://firebasestorage.googleapis.com/') ||
+        url.startsWith('https://storage.googleapis.com/') ||
+        url.includes('.firebasestorage.app/')
+      ) {
+        const proxyUrl = `/api/download?url=${encodeURIComponent(url)}&name=${encodeURIComponent(filename)}`;
+        const link = document.createElement('a');
+        link.href = proxyUrl;
+        link.download = filename;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+      } else {
+        const response = await fetch(url);
+        const blob = await response.blob();
+        const objUrl = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = objUrl;
+        link.download = filename;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        URL.revokeObjectURL(objUrl);
+      }
+      addToast('Descarga iniciada.', 'success');
+    } catch (err: unknown) {
+      addToast(`Error al descargar: ${err instanceof Error ? err.message : 'desconocido'}`, 'error');
+    }
+  }, [addToast]);
+
+  // Detecta extensión a partir de data URL o URL.
+  const guessExtFromImageUrl = (url: string): string => {
+    if (url.startsWith('data:')) {
+      const m = url.match(/^data:([^;,]+)[;,]/);
+      if (m) {
+        const mime = m[1].toLowerCase();
+        if (mime === 'image/jpeg' || mime === 'image/jpg') return 'jpg';
+        if (mime === 'image/png') return 'png';
+        if (mime === 'image/webp') return 'webp';
+        if (mime === 'image/gif') return 'gif';
+        if (mime === 'image/svg+xml') return 'svg';
+      }
+      return 'jpg';
+    }
+    const m = url.split('?')[0].match(/\.([a-zA-Z0-9]+)$/);
+    return m ? m[1].toLowerCase() : 'jpg';
   };
 
   const handleDeleteCreative = async (reqId: string, dimType: string) => {
@@ -2323,7 +2401,10 @@ export default function GanaPlayMainApp() {
               <div style={{ display: 'flex', gap: '10px', alignItems: 'center', marginBottom: '24px', flexWrap: 'wrap' }}>
                 {role === 'designer' ? (
                   <select value={selectedReq.status} onChange={handleChangeStatus}
-                    style={{ width: 'auto', background: STATUS_COLORS[selectedReq.status], color: STATUS_TEXT_COLORS[selectedReq.status], fontWeight: 700, border: `1px solid ${STATUS_TEXT_COLORS[selectedReq.status]}` }}>
+                    disabled={selectedReq.status === "Declinada"}
+                    title={selectedReq.status === "Declinada" ? "Solicitud declinada — cambio de estado deshabilitado" : "Cambiar estado"}
+                    style={{ width: 'auto', background: STATUS_COLORS[selectedReq.status], color: STATUS_TEXT_COLORS[selectedReq.status], fontWeight: 700, border: `1px solid ${STATUS_TEXT_COLORS[selectedReq.status]}`, cursor: selectedReq.status === "Declinada" ? 'not-allowed' : 'pointer' }}>
+                    {selectedReq.status === "Declinada" && <option value="Declinada">Declinada</option>}
                     {["Publicado", "Denegado", "En Proceso", "Planeando", "Pendiente"].map(st => <option key={st} value={st}>{st}</option>)}
                   </select>
                 ) : (
@@ -2456,9 +2537,34 @@ export default function GanaPlayMainApp() {
                     </div>
                     {selectedReq.referenceImage && (
                       <div style={{ marginTop: '14px' }}>
-                        <div style={{ fontSize: '10px', fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.8px', marginBottom: '8px' }}>Imagen de referencia</div>
-                        <img src={selectedReq.referenceImage} alt="Referencia" style={{ width: '100%', maxHeight: '320px', objectFit: 'contain', cursor: 'pointer', borderRadius: '10px', border: '1px solid var(--border-color)' }}
-                          onClick={() => window.open(selectedReq.referenceImage, '_blank')} />
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+                          <div style={{ fontSize: '10px', fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.8px' }}>Imagen de referencia</div>
+                          <button
+                            onClick={() => downloadImageByUrl(
+                              selectedReq.referenceImage!,
+                              `referencia_${selectedReq.id}.${guessExtFromImageUrl(selectedReq.referenceImage!)}`
+                            )}
+                            title="Descargar imagen de referencia"
+                            style={{
+                              display: 'flex', alignItems: 'center', gap: '5px', padding: '5px 11px',
+                              fontSize: '11px', fontWeight: 600, color: 'var(--accent-dark)',
+                              background: 'var(--accent-soft)', border: '1px solid var(--accent-color)',
+                              borderRadius: '8px', cursor: 'pointer', width: 'auto',
+                            }}
+                          >
+                            <Download size={12} /> Descargar
+                          </button>
+                        </div>
+                        <img
+                          src={selectedReq.referenceImage}
+                          alt="Referencia — clic para ampliar"
+                          title="Clic para ampliar"
+                          style={{ width: '100%', maxHeight: '320px', objectFit: 'contain', cursor: 'zoom-in', borderRadius: '10px', border: '1px solid var(--border-color)' }}
+                          onClick={() => setLightboxImage({
+                            url: selectedReq.referenceImage!,
+                            filename: `referencia_${selectedReq.id}.${guessExtFromImageUrl(selectedReq.referenceImage!)}`,
+                          })}
+                        />
                       </div>
                     )}
                   </div>
@@ -2556,9 +2662,13 @@ export default function GanaPlayMainApp() {
                             <div style={{ padding: '9px 13px', borderRadius: '12px', fontSize: '13px', color: 'var(--text-primary)', border: '1px solid var(--border-color)', background: m.isInternal ? 'var(--warning-soft)' : isMine ? 'var(--accent-soft)' : 'var(--surface-2)' }}>
                               {m.message && <div style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{m.message}</div>}
                               {m.image && (
-                                <img src={m.image} alt="Imagen del comentario" loading="lazy"
-                                  style={{ marginTop: m.message ? '8px' : 0, maxWidth: '100%', maxHeight: '260px', borderRadius: '8px', cursor: 'pointer', display: 'block' }}
-                                  onClick={() => window.open(m.image, '_blank')} />
+                                <img src={m.image} alt="Imagen del comentario — clic para ampliar" loading="lazy"
+                                  title="Clic para ampliar"
+                                  style={{ marginTop: m.message ? '8px' : 0, maxWidth: '100%', maxHeight: '260px', borderRadius: '8px', cursor: 'zoom-in', display: 'block' }}
+                                  onClick={() => setLightboxImage({
+                                    url: m.image!,
+                                    filename: `comentario_${selectedReq?.id || 'mensaje'}_${m.id || 'img'}.${guessExtFromImageUrl(m.image!)}`,
+                                  })} />
                               )}
                             </div>
                           </div>
@@ -2634,7 +2744,16 @@ export default function GanaPlayMainApp() {
                                 <FileText size={26} color="var(--text-secondary)" />
                               </div>
                             ) : (
-                              <img src={creative.url} alt={creative.type} style={{ width: '70px', height: '70px', objectFit: 'cover', borderRadius: '8px', flexShrink: 0, border: '1px solid var(--border-color)' }} />
+                              <img
+                                src={creative.url}
+                                alt={creative.type}
+                                title="Clic para ampliar"
+                                style={{ width: '70px', height: '70px', objectFit: 'cover', borderRadius: '8px', flexShrink: 0, border: '1px solid var(--border-color)', cursor: 'zoom-in' }}
+                                onClick={() => setLightboxImage({
+                                  url: creative.url,
+                                  filename: creative.type || `entregable_${selectedReq.id}.${guessExtFromImageUrl(creative.url)}`,
+                                })}
+                              />
                             )}
                             <div style={{ flex: 1, minWidth: 0 }}>
                               <div style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text-primary)', wordBreak: 'break-word' }}>{creative.type}</div>
@@ -2816,6 +2935,79 @@ export default function GanaPlayMainApp() {
               >{declineLoading ? 'Declinando…' : 'Confirmar declinación'}</button>
             </div>
           </div>
+        </div>
+      )}
+
+      {/* ─── LIGHTBOX: vista ampliada de imágenes (referencia, comentarios, entregables) ─── */}
+      {lightboxImage && (
+        <div
+          onClick={() => setLightboxImage(null)}
+          style={{
+            position: 'fixed', inset: 0, zIndex: 250,
+            background: 'rgba(0,0,0,0.88)', backdropFilter: 'blur(4px)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '40px',
+            cursor: 'zoom-out',
+          }}
+        >
+          <div
+            onClick={e => e.stopPropagation()}
+            style={{
+              position: 'relative',
+              display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '14px',
+              maxWidth: '92vw', maxHeight: '92vh',
+            }}
+          >
+            <img
+              src={lightboxImage.url}
+              alt="Vista ampliada"
+              style={{
+                maxWidth: '100%', maxHeight: '78vh',
+                objectFit: 'contain', borderRadius: '10px',
+                boxShadow: '0 20px 60px rgba(0,0,0,0.5)',
+                cursor: 'default',
+              }}
+            />
+            <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
+              <button
+                onClick={() => downloadImageByUrl(lightboxImage.url, lightboxImage.filename)}
+                style={{
+                  display: 'flex', alignItems: 'center', gap: '8px',
+                  padding: '10px 18px', fontSize: '13px', fontWeight: 700,
+                  background: 'var(--accent-color, #00783e)', color: '#fff',
+                  border: 'none', borderRadius: '10px', cursor: 'pointer', width: 'auto',
+                }}
+              >
+                <Download size={16} /> Descargar
+              </button>
+              <button
+                onClick={() => setLightboxImage(null)}
+                style={{
+                  display: 'flex', alignItems: 'center', gap: '6px',
+                  padding: '10px 18px', fontSize: '13px', fontWeight: 600,
+                  background: 'rgba(255,255,255,0.12)', color: '#fff',
+                  border: '1px solid rgba(255,255,255,0.2)', borderRadius: '10px', cursor: 'pointer', width: 'auto',
+                }}
+              >
+                <X size={16} /> Cerrar
+              </button>
+            </div>
+            <div style={{ fontSize: '11px', color: 'rgba(255,255,255,0.6)' }}>
+              {lightboxImage.filename}
+            </div>
+          </div>
+          <button
+            onClick={() => setLightboxImage(null)}
+            aria-label="Cerrar vista ampliada"
+            style={{
+              position: 'absolute', top: '20px', right: '20px',
+              background: 'rgba(255,255,255,0.08)', border: '1px solid rgba(255,255,255,0.15)',
+              color: '#fff', cursor: 'pointer', width: '40px', height: '40px',
+              borderRadius: '10px', display: 'flex', alignItems: 'center', justifyContent: 'center',
+              padding: 0,
+            }}
+          >
+            <X size={20} />
+          </button>
         </div>
       )}
 
