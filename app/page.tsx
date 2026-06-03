@@ -149,7 +149,8 @@ type RequestType = {
   postPublishDate?: string;
   status: RequestStatus;
   priority: RequestPriority;
-  referenceImage?: string;
+  referenceImage?: string;        // legacy: una sola imagen (compatibilidad con datos previos)
+  referenceImages?: string[];     // varias imágenes de referencia (sin límite)
   assignedTo?: string;
   creatives: Creative[];
   comments?: number;
@@ -262,7 +263,7 @@ export default function GanaPlayMainApp() {
   const [deliveryDate, setDeliveryDate] = useState("");
   const [dimensions, setDimensions] = useState<string[]>([]);
   const [countries, setCountries] = useState<string[]>([]);
-  const [referenceImg, setReferenceImg] = useState<string | undefined>(undefined);
+  const [referenceImgs, setReferenceImgs] = useState<string[]>([]);
   const [priority, setPriority] = useState<RequestPriority>("Medio");
   const [area, setArea] = useState(AREAS[0]);
   const [requesterName, setRequesterName] = useState("");
@@ -531,13 +532,13 @@ export default function GanaPlayMainApp() {
       creatives: [],
       comments: 0,
       history: [{ action: "Solicitud creada", by: requesterName, at: now }],
-      ...(referenceImg ? { referenceImage: referenceImg } : {}),
+      ...(referenceImgs.length > 0 ? { referenceImages: referenceImgs } : {}),
     };
 
     try {
       await setDoc(doc(db, "requests", nextId), { ...newReq, updatedAt: serverTimestamp() });
       setTitleStr(""); setCopyStr(""); setDimensions([]); setCountries([]); setChannels([]);
-      setReferenceImg(undefined); setPriority("Medio"); setFormat("static");
+      setReferenceImgs([]); setPriority("Medio"); setFormat("static");
       setRequesterName(""); setRequesterEmail(""); setObjective(""); setArea(AREAS[0]);
       setCreateModalOpen(false);
       addToast(`Solicitud ${nextId} creada correctamente.`, 'success');
@@ -558,20 +559,35 @@ export default function GanaPlayMainApp() {
     }
   };
 
-  // Imagen de referencia: se comprime y guarda como data URL (no usa Storage).
+  // Imágenes de referencia: se comprimen y guardan como data URLs (no usa Storage).
+  // Acepta varios archivos a la vez y los acumula sin límite.
   const handleRefUpload = async (e: ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
+    const files = Array.from(e.target.files ?? []);
     e.target.value = "";
-    if (!file) return;
-    const err = validateImage(file);
-    if (err) { addToast(err, 'error'); return; }
+    if (files.length === 0) return;
     setLoading(true);
     try {
-      const dataUrl = await compressImageToDataUrl(file);
-      setReferenceImg(dataUrl);
-      addToast("Imagen de referencia lista.", 'success');
+      const dataUrls: string[] = [];
+      let rejected = 0;
+      for (const file of files) {
+        const err = validateImage(file);
+        if (err) { rejected++; continue; }
+        dataUrls.push(await compressImageToDataUrl(file));
+      }
+      if (dataUrls.length > 0) {
+        setReferenceImgs((prev) => [...prev, ...dataUrls]);
+        addToast(
+          dataUrls.length === 1
+            ? "Imagen de referencia lista."
+            : `${dataUrls.length} imágenes de referencia listas.`,
+          'success'
+        );
+      }
+      if (rejected > 0) {
+        addToast(`${rejected} archivo(s) se omitieron (formato o tamaño no válido).`, 'error');
+      }
     } catch (e2: unknown) {
-      addToast("Error procesando la imagen: " + (e2 instanceof Error ? e2.message : ""), 'error');
+      addToast("Error procesando las imágenes: " + (e2 instanceof Error ? e2.message : ""), 'error');
     } finally {
       setLoading(false);
     }
@@ -2329,25 +2345,41 @@ export default function GanaPlayMainApp() {
               </div>
 
               <div className="form-group">
-                <label className="label">Imagen de referencia (opcional)</label>
-                <label style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '10px', padding: '26px', background: 'var(--surface-1)', borderRadius: '14px', border: '2px dashed var(--accent-color)', cursor: 'pointer', position: 'relative', width: 'auto' }}>
-                  {referenceImg ? (
-                    <>
-                      <img src={referenceImg} style={{ width: '100%', maxHeight: '200px', objectFit: 'contain', borderRadius: '8px' }} alt="Referencia" />
-                      <div style={{ position: 'absolute', top: '10px', right: '10px', background: 'var(--danger)', padding: '5px', borderRadius: '50%', cursor: 'pointer', display: 'flex' }} onClick={(e) => { e.preventDefault(); setReferenceImg(undefined); }}>
-                        <X size={16} color="#fff" />
-                      </div>
-                    </>
-                  ) : (
-                    <>
-                      <UploadCloud size={36} color="var(--accent-color)" />
-                      <div style={{ textAlign: 'center' }}>
-                        <div style={{ fontWeight: 700, color: 'var(--text-primary)', marginBottom: '4px' }}>Sube una imagen de referencia</div>
-                        <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>JPG, PNG o GIF (máx. 8 MB)</div>
-                      </div>
-                    </>
+                <label className="label">
+                  Imágenes de referencia (opcional)
+                  {referenceImgs.length > 0 && (
+                    <span style={{ marginLeft: '8px', fontSize: '11px', fontWeight: 700, color: 'var(--accent-color)' }}>
+                      {referenceImgs.length} {referenceImgs.length === 1 ? 'imagen' : 'imágenes'}
+                    </span>
                   )}
-                  <input type="file" accept="image/*" style={{ display: 'none' }} onChange={handleRefUpload} />
+                </label>
+
+                {referenceImgs.length > 0 && (
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(110px, 1fr))', gap: '10px', marginBottom: '12px' }}>
+                    {referenceImgs.map((img, i) => (
+                      <div key={i} style={{ position: 'relative', borderRadius: '10px', overflow: 'hidden', border: '1px solid var(--border-color)', background: 'var(--surface-1)' }}>
+                        <img src={img} style={{ width: '100%', height: '110px', objectFit: 'cover', display: 'block' }} alt={`Referencia ${i + 1}`} />
+                        <div
+                          style={{ position: 'absolute', top: '6px', right: '6px', background: 'var(--danger)', padding: '4px', borderRadius: '50%', cursor: 'pointer', display: 'flex' }}
+                          title="Quitar imagen"
+                          onClick={(e) => { e.preventDefault(); setReferenceImgs((prev) => prev.filter((_, idx) => idx !== i)); }}
+                        >
+                          <X size={14} color="#fff" />
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                <label style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '10px', padding: '26px', background: 'var(--surface-1)', borderRadius: '14px', border: '2px dashed var(--accent-color)', cursor: 'pointer', position: 'relative', width: 'auto' }}>
+                  <UploadCloud size={36} color="var(--accent-color)" />
+                  <div style={{ textAlign: 'center' }}>
+                    <div style={{ fontWeight: 700, color: 'var(--text-primary)', marginBottom: '4px' }}>
+                      {referenceImgs.length > 0 ? 'Añadir más imágenes' : 'Sube imágenes de referencia'}
+                    </div>
+                    <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>Puedes seleccionar varias · JPG, PNG o GIF (máx. 8 MB c/u)</div>
+                  </div>
+                  <input type="file" accept="image/*" multiple style={{ display: 'none' }} onChange={handleRefUpload} />
                 </label>
               </div>
 
@@ -2535,38 +2567,52 @@ export default function GanaPlayMainApp() {
                         </div>
                       )}
                     </div>
-                    {selectedReq.referenceImage && (
-                      <div style={{ marginTop: '14px' }}>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
-                          <div style={{ fontSize: '10px', fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.8px' }}>Imagen de referencia</div>
-                          <button
-                            onClick={() => downloadImageByUrl(
-                              selectedReq.referenceImage!,
-                              `referencia_${selectedReq.id}.${guessExtFromImageUrl(selectedReq.referenceImage!)}`
-                            )}
-                            title="Descargar imagen de referencia"
-                            style={{
-                              display: 'flex', alignItems: 'center', gap: '5px', padding: '5px 11px',
-                              fontSize: '11px', fontWeight: 600, color: 'var(--accent-dark)',
-                              background: 'var(--accent-soft)', border: '1px solid var(--accent-color)',
-                              borderRadius: '8px', cursor: 'pointer', width: 'auto',
-                            }}
-                          >
-                            <Download size={12} /> Descargar
-                          </button>
+                    {(() => {
+                      // Combina el campo legacy (una imagen) con el array nuevo (varias).
+                      const refImgs = [
+                        ...(selectedReq.referenceImage ? [selectedReq.referenceImage] : []),
+                        ...(selectedReq.referenceImages ?? []),
+                      ];
+                      if (refImgs.length === 0) return null;
+                      return (
+                        <div style={{ marginTop: '14px' }}>
+                          <div style={{ marginBottom: '8px' }}>
+                            <div style={{ fontSize: '10px', fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.8px' }}>
+                              {refImgs.length === 1 ? 'Imagen de referencia' : `Imágenes de referencia (${refImgs.length})`}
+                            </div>
+                          </div>
+                          <div style={{ display: 'grid', gridTemplateColumns: refImgs.length === 1 ? '1fr' : 'repeat(auto-fill, minmax(150px, 1fr))', gap: '10px' }}>
+                            {refImgs.map((img, i) => {
+                              const filename = `referencia_${selectedReq.id}_${i + 1}.${guessExtFromImageUrl(img)}`;
+                              return (
+                                <div key={i} style={{ position: 'relative', borderRadius: '10px', overflow: 'hidden', border: '1px solid var(--border-color)' }}>
+                                  <img
+                                    src={img}
+                                    alt={`Referencia ${i + 1} — clic para ampliar`}
+                                    title="Clic para ampliar"
+                                    style={{ width: '100%', maxHeight: refImgs.length === 1 ? '320px' : '170px', objectFit: 'contain', cursor: 'zoom-in', display: 'block', background: 'var(--surface-1)' }}
+                                    onClick={() => setLightboxImage({ url: img, filename })}
+                                  />
+                                  <button
+                                    onClick={(e) => { e.stopPropagation(); downloadImageByUrl(img, filename); }}
+                                    title="Descargar imagen de referencia"
+                                    style={{
+                                      position: 'absolute', top: '8px', right: '8px',
+                                      display: 'flex', alignItems: 'center', gap: '5px', padding: '5px 11px',
+                                      fontSize: '11px', fontWeight: 600, color: 'var(--accent-dark)',
+                                      background: 'var(--accent-soft)', border: '1px solid var(--accent-color)',
+                                      borderRadius: '8px', cursor: 'pointer', width: 'auto',
+                                    }}
+                                  >
+                                    <Download size={12} /> Descargar
+                                  </button>
+                                </div>
+                              );
+                            })}
+                          </div>
                         </div>
-                        <img
-                          src={selectedReq.referenceImage}
-                          alt="Referencia — clic para ampliar"
-                          title="Clic para ampliar"
-                          style={{ width: '100%', maxHeight: '320px', objectFit: 'contain', cursor: 'zoom-in', borderRadius: '10px', border: '1px solid var(--border-color)' }}
-                          onClick={() => setLightboxImage({
-                            url: selectedReq.referenceImage!,
-                            filename: `referencia_${selectedReq.id}.${guessExtFromImageUrl(selectedReq.referenceImage!)}`,
-                          })}
-                        />
-                      </div>
-                    )}
+                      );
+                    })()}
                   </div>
 
                   {/* Panel feedback IA */}
