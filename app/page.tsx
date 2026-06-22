@@ -279,6 +279,7 @@ export default function GanaPlayMainApp() {
   const [objective, setObjective] = useState("");
   const [channels, setChannels] = useState<string[]>([]);
   const [initialComment, setInitialComment] = useState("");
+  const [initialCommentImgs, setInitialCommentImgs] = useState<string[]>([]);
 
   // ── Archivos / chat ──
   const [loading, setLoading] = useState(false);
@@ -542,18 +543,31 @@ export default function GanaPlayMainApp() {
 
     const nextId = getNextId();
     const now = new Date().toISOString();
-    // Comentario/recomendación inicial (opcional): se guarda como primer mensaje
-    // del hilo de la solicitud desde el momento de la creación.
-    const initialMessages: RequestMessage[] = initialComment.trim()
-      ? [{
-          id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-          authorName: requesterName,
-          authorRole: role ?? "",
-          message: initialComment.trim(),
-          isInternal: false,
-          createdAt: now,
-        }]
-      : [];
+    // Comentario/recomendación inicial (opcional): texto y/o imágenes pegadas.
+    // Se guardan como los primeros mensajes del hilo desde la creación. El
+    // texto va en un mensaje y cada imagen pegada en su propio mensaje.
+    const initialMessages: RequestMessage[] = [];
+    if (initialComment.trim()) {
+      initialMessages.push({
+        id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        authorName: requesterName,
+        authorRole: role ?? "",
+        message: initialComment.trim(),
+        isInternal: false,
+        createdAt: now,
+      });
+    }
+    initialCommentImgs.forEach((img, i) => {
+      initialMessages.push({
+        id: `${Date.now()}-img${i}-${Math.random().toString(36).slice(2, 6)}`,
+        authorName: requesterName,
+        authorRole: role ?? "",
+        message: "",
+        image: img,
+        isInternal: false,
+        createdAt: now,
+      });
+    });
     const newReq: RequestType = {
       id: nextId,
       title: titleStr || "Nuevo Requerimiento",
@@ -583,6 +597,7 @@ export default function GanaPlayMainApp() {
       setReferenceImgs([]); setPriority("Medio"); setFormat("static");
       setRequesterName(""); setRequesterEmail(""); setObjective(""); setArea(AREAS[0]);
       setInitialComment("");
+      setInitialCommentImgs([]);
       setCreateModalOpen(false);
       addToast(`Solicitud ${nextId} creada correctamente.`, 'success');
       await createNotification('new_request', '📋 Nueva solicitud', `${nextId}: "${newReq.title}" — Entrega ${newReq.deliveryDate}`, 'designer', nextId);
@@ -777,6 +792,34 @@ export default function GanaPlayMainApp() {
     const file = e.target.files?.[0];
     e.target.value = "";
     if (file) void stageCommentImage(file);
+  };
+
+  // ── Imágenes para el comentario inicial del formulario de nueva solicitud ──
+  // Acepta varias (pegadas con Ctrl+V o adjuntas) y las acumula.
+  const stageInitialCommentImage = useCallback(async (file: Blob & { type: string; size: number; name?: string }) => {
+    const err = validateImage(file);
+    if (err) { addToast(err, 'error'); return; }
+    try {
+      const dataUrl = await compressImageToDataUrl(file, { maxDimension: 1300, maxBytes: 420 * 1024 });
+      setInitialCommentImgs(prev => [...prev, dataUrl]);
+      addToast("Imagen añadida al comentario.", 'success');
+    } catch {
+      addToast("No se pudo procesar la imagen.", 'error');
+    }
+  }, [addToast]);
+
+  const handleInitialCommentPaste = (e: React.ClipboardEvent) => {
+    const items = Array.from(e.clipboardData.items).filter(i => i.type.startsWith("image/"));
+    if (items.length > 0) {
+      e.preventDefault();
+      items.forEach(it => { const f = it.getAsFile(); if (f) void stageInitialCommentImage(f); });
+    }
+  };
+
+  const handleInitialCommentAttach = (e: ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files ?? []);
+    e.target.value = "";
+    files.forEach(f => void stageInitialCommentImage(f));
   };
 
   // Evaluación IA de una pieza, en segundo plano: NO bloquea la subida.
@@ -2509,14 +2552,43 @@ export default function GanaPlayMainApp() {
               <div className="form-group">
                 <label className="label">
                   Comentarios / Recomendaciones iniciales (opcional)
+                  {initialCommentImgs.length > 0 && (
+                    <span style={{ marginLeft: '8px', fontSize: '11px', fontWeight: 700, color: 'var(--accent-color)' }}>
+                      {initialCommentImgs.length} {initialCommentImgs.length === 1 ? 'imagen' : 'imágenes'}
+                    </span>
+                  )}
                 </label>
                 <textarea
                   value={initialComment}
                   onChange={(e) => setInitialComment(e.target.value)}
+                  onPaste={handleInitialCommentPaste}
                   rows={3}
-                  placeholder="Datos del partido, estadio, fecha, tono deseado, referencias… Quedará como el primer comentario del hilo."
+                  placeholder="Datos del partido, estadio, fecha, tono deseado, referencias… Pega imágenes con Ctrl+V. Quedará como el primer comentario del hilo."
                   style={{ width: '100%', resize: 'vertical', fontSize: '13px' }}
                 />
+                {initialCommentImgs.length > 0 && (
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(90px, 1fr))', gap: '8px', marginTop: '10px' }}>
+                    {initialCommentImgs.map((img, i) => (
+                      <div key={i} style={{ position: 'relative', borderRadius: '8px', overflow: 'hidden', border: '1px solid var(--border-color)', background: 'var(--surface-1)' }}>
+                        <img src={img} style={{ width: '100%', height: '90px', objectFit: 'cover', display: 'block' }} alt={`Comentario imagen ${i + 1}`} />
+                        <div
+                          style={{ position: 'absolute', top: '5px', right: '5px', background: 'var(--danger)', padding: '3px', borderRadius: '50%', cursor: 'pointer', display: 'flex' }}
+                          title="Quitar imagen"
+                          onClick={(e) => { e.preventDefault(); setInitialCommentImgs(prev => prev.filter((_, idx) => idx !== i)); }}
+                        >
+                          <X size={13} color="#fff" />
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                <div style={{ display: 'flex', alignItems: 'center', gap: '10px', margin: '8px 0 0' }}>
+                  <label style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', cursor: 'pointer', color: 'var(--accent-color)', fontSize: '12px', fontWeight: 600, width: 'auto' }}>
+                    <ImageIcon size={16} /> Adjuntar imágenes
+                    <input type="file" accept="image/png,image/jpeg,image/webp" multiple style={{ display: 'none' }} onChange={handleInitialCommentAttach} />
+                  </label>
+                  <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>o pégalas con Ctrl+V en el campo de arriba.</span>
+                </div>
                 <p style={{ fontSize: '11px', color: 'var(--text-muted)', margin: '6px 0 0' }}>
                   Podrás seguir añadiendo comentarios e imágenes dentro de la solicitud después de crearla.
                 </p>
