@@ -81,6 +81,23 @@ service cloud.firestore {
       allow update, delete: if false; // jamás modificar audit logs
     }
 
+    // ───── REDES SOCIALES (calendario de entregas externas) ─────
+    // Metadatos de carpetas y archivos subidos por el equipo de diseño.
+    // Los binarios viven en Firebase Storage; aquí solo el índice ligero.
+    match /social_media/{itemId} {
+      allow read: if true; // todos pueden ver y descargar
+      // Crear: documento pequeño (solo metadatos, no data URLs) con campos básicos.
+      allow create: if
+        request.resource.size() < 50000
+        && request.resource.data.keys().hasAll(['date', 'kind', 'name'])
+        && request.resource.data.kind in ['folder', 'file']
+        && request.resource.data.name is string
+        && request.resource.data.name.size() > 0
+        && request.resource.data.name.size() <= 300;
+      allow update: if false; // los items no se editan, se borran y recrean
+      allow delete: if true;  // la app limita el borrado al rol 'designer'
+    }
+
     // ───── DENY ALL POR DEFECTO ─────
     // Cualquier colección no listada arriba queda explícitamente bloqueada.
     match /{document=**} {

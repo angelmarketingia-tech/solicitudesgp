@@ -14,11 +14,12 @@ import {
 import { db, storage } from '@/lib/firebase';
 import {
   collection, doc, onSnapshot, setDoc, updateDoc, deleteDoc,
-  addDoc, query, orderBy, serverTimestamp, getDocs, limit, limitToLast
+  addDoc, query, orderBy, serverTimestamp, getDoc, getDocs, limit, limitToLast, arrayUnion
 } from 'firebase/firestore';
 import { ref, uploadBytes, getDownloadURL, deleteObject, listAll } from 'firebase/storage';
 import { emailForUser, DEFAULT_TRAFFICKER_EMAIL } from '@/lib/users';
 import { compressImageToDataUrl, validateImage } from '@/lib/image';
+import SocialMediaTab from './SocialMediaTab';
 
 // ─── Configuración visual de estados y prioridades (tema claro GanaPlay) ───
 const STATUS_COLORS: Record<string, string> = {
@@ -154,6 +155,10 @@ type RequestType = {
   assignedTo?: string;
   creatives: Creative[];
   comments?: number;
+  // Comentarios/recomendaciones: viven en el propio documento (array), no en
+  // una subcolección. Así se rigen por las reglas de `requests` (que SÍ están
+  // desplegadas) y se sincronizan en tiempo real con el listener principal.
+  messages?: RequestMessage[];
   // ── Campos ampliados (opcionales: compatibilidad con datos previos) ──
   area?: string;
   requesterName?: string;
@@ -189,7 +194,10 @@ type RequestMessage = {
   message: string;
   image?: string;
   isInternal?: boolean;
-  createdAt?: { seconds: number } | null;
+  // Timestamp como ISO string (no se puede usar serverTimestamp dentro de un
+  // array). Se acepta también el formato { seconds } por compatibilidad con
+  // comentarios antiguos guardados en la subcolección.
+  createdAt?: { seconds: number } | string | null;
 };
 
 type NotificationItem = {
@@ -270,6 +278,7 @@ export default function GanaPlayMainApp() {
   const [requesterEmail, setRequesterEmail] = useState("");
   const [objective, setObjective] = useState("");
   const [channels, setChannels] = useState<string[]>([]);
+  const [initialComment, setInitialComment] = useState("");
 
   // ── Archivos / chat ──
   const [loading, setLoading] = useState(false);
@@ -427,16 +436,36 @@ export default function GanaPlayMainApp() {
   }, [role]);
 
   // ─── Chat de la solicitud abierta (tiempo real) ───
+  // IMPORTANTE: depende solo de `selectedReqId` (no del objeto `selectedReq`
+  // completo). Si dependiera del objeto, CADA `setSelectedReq` (p. ej. al subir
+  // un entregable) recrearía una nueva referencia → el listener se
+  // desuscribiría y resuscribiría, y en ese hueco los mensajes recién enviados
+  // "desaparecían" un instante (bug reportado). Anclándolo al id, el listener
+  // permanece estable mientras la misma solicitud esté abierta.
+  const selectedReqId = selectedReq?.id ?? null;
   useEffect(() => {
-    if (!modalOpen || !selectedReq) { setReqMessages([]); return; }
-    const reqId = selectedReq.id;
-    // Mensajes de la solicitud: últimos 200 en orden cronológico ascendente.
-    const qMsg = query(collection(db, "requests", reqId, "messages"), orderBy("createdAt", "asc"), limitToLast(200));
-    const unsub = onSnapshot(qMsg, (snap) => {
-      setReqMessages(snap.docs.map(d => ({ id: d.id, ...d.data() } as RequestMessage)));
-    }, () => setReqMessages([]));
-    return () => unsub();
-  }, [modalOpen, selectedReq]);
+    if (!modalOpen || !selectedReqId) { setReqMessages([]); return; }
+    // Los comentarios viven en el array `messages` del propio documento de la
+    // solicitud, así que se leen del listener principal (`requests`) — que SÍ
+    // tiene permisos. Antes vivían en la subcolección `messages`, cuyas reglas
+    // de seguridad no estaban desplegadas y devolvían PERMISSION_DENIED: por eso
+    // los comentarios "se enviaban" pero no se guardaban ni se volvían a ver.
+    const live = requests.find(r => r.id === selectedReqId);
+    // Unión por id de la copia del servidor y la local (selectedReq). Así un
+    // comentario recién enviado (reflejo optimista) no parpadea ni desaparece
+    // mientras el servidor propaga el cambio al listener principal.
+    const byId = new Map<string, RequestMessage>();
+    for (const m of (live?.messages ?? []) as RequestMessage[]) byId.set(m.id, m);
+    for (const m of (selectedReq?.messages ?? []) as RequestMessage[]) if (!byId.has(m.id)) byId.set(m.id, m);
+    // Orden cronológico ascendente (tolerante a ISO string o { seconds }).
+    const tsOf = (m: RequestMessage) => {
+      const c = m.createdAt;
+      if (!c) return 0;
+      if (typeof c === 'string') return Date.parse(c) || 0;
+      return (c.seconds || 0) * 1000;
+    };
+    setReqMessages([...byId.values()].sort((a, b) => tsOf(a) - tsOf(b)));
+  }, [modalOpen, selectedReqId, requests, selectedReq]);
 
   useEffect(() => {
     if (reqChatRef.current) reqChatRef.current.scrollTop = reqChatRef.current.scrollHeight;
@@ -513,6 +542,18 @@ export default function GanaPlayMainApp() {
 
     const nextId = getNextId();
     const now = new Date().toISOString();
+    // Comentario/recomendación inicial (opcional): se guarda como primer mensaje
+    // del hilo de la solicitud desde el momento de la creación.
+    const initialMessages: RequestMessage[] = initialComment.trim()
+      ? [{
+          id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+          authorName: requesterName,
+          authorRole: role ?? "",
+          message: initialComment.trim(),
+          isInternal: false,
+          createdAt: now,
+        }]
+      : [];
     const newReq: RequestType = {
       id: nextId,
       title: titleStr || "Nuevo Requerimiento",
@@ -532,6 +573,7 @@ export default function GanaPlayMainApp() {
       creatives: [],
       comments: 0,
       history: [{ action: "Solicitud creada", by: requesterName, at: now }],
+      ...(initialMessages.length > 0 ? { messages: initialMessages } : {}),
       ...(referenceImgs.length > 0 ? { referenceImages: referenceImgs } : {}),
     };
 
@@ -540,6 +582,7 @@ export default function GanaPlayMainApp() {
       setTitleStr(""); setCopyStr(""); setDimensions([]); setCountries([]); setChannels([]);
       setReferenceImgs([]); setPriority("Medio"); setFormat("static");
       setRequesterName(""); setRequesterEmail(""); setObjective(""); setArea(AREAS[0]);
+      setInitialComment("");
       setCreateModalOpen(false);
       addToast(`Solicitud ${nextId} creada correctamente.`, 'success');
       await createNotification('new_request', '📋 Nueva solicitud', `${nextId}: "${newReq.title}" — Entrega ${newReq.deliveryDate}`, 'designer', nextId);
@@ -678,15 +721,28 @@ export default function GanaPlayMainApp() {
     const image = reqMsgImage;
     setReqMsgInput("");
     setReqMsgImage(null);
+    // El comentario se añade al array `messages` del documento de la solicitud
+    // (arrayUnion). No se puede usar serverTimestamp() dentro de un array, así
+    // que el timestamp es un ISO string del cliente (igual que `history`).
+    const newMsg: RequestMessage = {
+      id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      authorName: userName,
+      authorRole: role ?? "",
+      message: text,
+      ...(image ? { image } : {}),
+      isInternal: reqMsgInternal,
+      createdAt: new Date().toISOString(),
+    };
     try {
-      await addDoc(collection(db, "requests", selectedReq.id, "messages"), {
-        authorName: userName,
-        authorRole: role,
-        message: text,
-        ...(image ? { image } : {}),
-        isInternal: reqMsgInternal,
-        createdAt: serverTimestamp(),
+      await updateDoc(doc(db, "requests", selectedReq.id), {
+        messages: arrayUnion(newMsg),
+        updatedAt: serverTimestamp(),
       });
+      // Reflejo optimista inmediato en la solicitud abierta (el listener
+      // principal lo confirmará en cuanto el servidor propague el cambio).
+      setSelectedReq(prev => (prev && prev.id === selectedReq.id)
+        ? { ...prev, messages: [...(prev.messages ?? []), newMsg] }
+        : prev);
     } catch {
       setReqMsgInput(text);
       setReqMsgImage(image);
@@ -729,7 +785,6 @@ export default function GanaPlayMainApp() {
     type: string,
     file: File,
     ctx: { copy: string; format: string; countries: string[] },
-    creativesAfterUpload: Creative[],
   ) => {
     try {
       const reader = new FileReader();
@@ -755,7 +810,17 @@ export default function GanaPlayMainApp() {
       clearTimeout(timer);
       const resData = await res.json();
       if (!res.ok || !resData.rating) return;
-      const merged = creativesAfterUpload.map(c =>
+
+      // CLAVE anti-"desaparece": NO escribimos `creativesAfterUpload` (lista
+      // capturada cuando este archivo se subió; puede ser vieja si después se
+      // subieron más). Leemos el doc ACTUAL y solo añadimos la evaluación a la
+      // pieza que corresponde, preservando todo lo demás. Si la pieza ya no
+      // existe (fue reemplazada/borrada), no hacemos nada.
+      const freshSnap = await getDoc(doc(db, "requests", reqId));
+      if (!freshSnap.exists()) return;
+      const currentCreatives: Creative[] = (freshSnap.data().creatives as Creative[]) || [];
+      if (!currentCreatives.some(c => c.type === type)) return;
+      const merged = currentCreatives.map(c =>
         c.type === type ? { ...c, aiEvaluation: resData as AIEvaluation } : c);
       await updateDoc(doc(db, "requests", reqId), { creatives: merged });
       setSelectedReq(prev => (prev && prev.id === reqId) ? { ...prev, creatives: merged } : prev);
@@ -844,9 +909,21 @@ export default function GanaPlayMainApp() {
     }
 
     // ── Persistir en Firestore ──────────────────────────────────────
+    // ROBUSTEZ ante subidas múltiples: leemos el doc ACTUAL de Firestore y
+    // hacemos el merge sobre la lista real más reciente (no sobre
+    // `reqSnapshot` en memoria, que puede estar desactualizado porque la
+    // evaluación IA en background u otra subida ya escribieron). Así, al subir
+    // 3 archivos, ninguno pisa al anterior: TODOS quedan guardados de una vez.
     try {
       const newCreative: Creative = { url: downloadURL, type };
-      const newCreativesList = [...reqSnapshot.creatives.filter(c => c.type !== type), newCreative];
+
+      const freshSnap = await getDoc(doc(db, "requests", reqSnapshot.id));
+      const freshData = freshSnap.exists() ? freshSnap.data() : null;
+      const baseCreatives: Creative[] = (freshData?.creatives as Creative[]) || reqSnapshot.creatives || [];
+      const baseHistory: HistoryEntry[] = (freshData?.history as HistoryEntry[]) || reqSnapshot.history || [];
+
+      // Reemplaza la pieza del mismo `type` si existía; conserva el resto.
+      const newCreativesList = [...baseCreatives.filter(c => c.type !== type), newCreative];
       const entry: HistoryEntry = {
         action: usedFallback
           ? `Entregable subido a Firestore (Storage caído): ${safeName}`
@@ -854,7 +931,7 @@ export default function GanaPlayMainApp() {
         by: userName,
         at: new Date().toISOString(),
       };
-      const newHistory = [...(reqSnapshot.history || []), entry];
+      const newHistory = [...baseHistory, entry];
 
       await updateDoc(doc(db, "requests", reqSnapshot.id), {
         status: "En Proceso",
@@ -884,7 +961,7 @@ export default function GanaPlayMainApp() {
       }
       if (isImage) {
         void analyzeCreativeInBackground(reqSnapshot.id, type, file,
-          { copy: reqSnapshot.copy, format: reqSnapshot.format, countries: reqSnapshot.countries }, newCreativesList);
+          { copy: reqSnapshot.copy, format: reqSnapshot.format, countries: reqSnapshot.countries });
       }
       return updatedReq;
     } catch (err: unknown) {
@@ -895,19 +972,40 @@ export default function GanaPlayMainApp() {
   }, [userName, addToast, createNotification, sendEmailAlert, analyzeCreativeInBackground]);
 
   // Subida de uno o varios entregables a la vez.
+  // Garantías:
+  //  - Las subidas se hacen EN SERIE (working = updated). Cada `uploadDeliverableFile`
+  //    relee el doc fresco de Firestore y mergea, así ningún archivo pisa a otro:
+  //    si el diseñador sube 3, los 3 quedan guardados de una vez.
+  //  - Sin "alucinaciones" optimistas: una pieza solo aparece en la UI DESPUÉS de
+  //    confirmarse su escritura en Firestore. Si una falla, NO se pinta y luego se
+  //    quita — simplemente no aparece, y se reporta exactamente cuáles fallaron.
   const handleDeliverablesUpload = async (e: ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(e.target.files || []);
     e.target.value = "";
     if (files.length === 0 || !selectedReq) return;
     let working: RequestType = selectedReq;
     let ok = 0;
+    const failed: string[] = [];
     setLoading(true);
     try {
       for (const file of files) {
         const updated = await uploadDeliverableFile(file, working);
         if (updated) { working = updated; ok++; }
+        else failed.push(file.name);
       }
-      if (ok > 0) addToast(`${ok} entregable${ok > 1 ? 's' : ''} subido${ok > 1 ? 's' : ''} correctamente.`, 'success');
+      // Sincroniza la UI con el estado real acumulado (todas las piezas confirmadas).
+      setSelectedReq(prev => (prev && prev.id === working.id) ? working : prev);
+
+      if (ok > 0) {
+        addToast(`${ok} entregable${ok > 1 ? 's' : ''} subido${ok > 1 ? 's' : ''} correctamente.`, 'success');
+      }
+      if (failed.length > 0) {
+        // Mensaje único y claro: qué falló. (Cada fallo ya emitió su propio detalle.)
+        addToast(
+          `No se ${failed.length > 1 ? 'subieron' : 'subió'} ${failed.length} archivo${failed.length > 1 ? 's' : ''}: ${failed.join(', ')}. Vuelve a intentarlo.`,
+          'error'
+        );
+      }
     } finally {
       setLoading(false);
     }
@@ -1670,6 +1768,7 @@ export default function GanaPlayMainApp() {
           )}
           <div style={navItemStyle(activeTab === 'Historial')} onClick={() => setActiveTab('Historial')}><Clock size={15} /> Historial</div>
           <div style={navItemStyle(activeTab === 'Tabla Principal')} onClick={() => setActiveTab('Tabla Principal')}><List size={15} /> Tabla</div>
+          <div style={navItemStyle(activeTab === 'Redes Sociales')} onClick={() => setActiveTab('Redes Sociales')}><CalendarDays size={15} /> Redes Sociales</div>
         </div>
 
         {/* ESTADO DE CARGA */}
@@ -2115,6 +2214,11 @@ export default function GanaPlayMainApp() {
             </div>
           );
         })()}
+
+        {/* ─── VISTA: REDES SOCIALES (calendario + carpetas + videos) ─── */}
+        {activeTab === 'Redes Sociales' && (
+          <SocialMediaTab role={role} userName={userName} addToast={addToast} />
+        )}
       </div>
 
       {/* ─── CHAT IA ANDROMEDA (DISEÑADOR) ─── */}
@@ -2400,6 +2504,22 @@ export default function GanaPlayMainApp() {
                   <label className="label">Fecha límite de entrega *</label>
                   <input type="date" value={deliveryDate} onChange={(e) => setDeliveryDate(e.target.value)} required />
                 </div>
+              </div>
+
+              <div className="form-group">
+                <label className="label">
+                  Comentarios / Recomendaciones iniciales (opcional)
+                </label>
+                <textarea
+                  value={initialComment}
+                  onChange={(e) => setInitialComment(e.target.value)}
+                  rows={3}
+                  placeholder="Datos del partido, estadio, fecha, tono deseado, referencias… Quedará como el primer comentario del hilo."
+                  style={{ width: '100%', resize: 'vertical', fontSize: '13px' }}
+                />
+                <p style={{ fontSize: '11px', color: 'var(--text-muted)', margin: '6px 0 0' }}>
+                  Podrás seguir añadiendo comentarios e imágenes dentro de la solicitud después de crearla.
+                </p>
               </div>
 
               <button type="submit" className="btn" style={{ width: '100%', marginTop: '12px', padding: '15px' }}>
@@ -2703,7 +2823,7 @@ export default function GanaPlayMainApp() {
                             <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginBottom: '3px', textAlign: isMine ? 'right' : 'left' }}>
                               {m.authorName} · {m.authorRole}
                               {m.isInternal && <span style={{ color: 'var(--warning)', fontWeight: 700 }}> · nota interna</span>}
-                              {m.createdAt?.seconds ? ' · ' + new Date(m.createdAt.seconds * 1000).toLocaleString('es-ES', { dateStyle: 'short', timeStyle: 'short' }) : ''}
+                              {m.createdAt ? ' · ' + new Date(typeof m.createdAt === 'string' ? m.createdAt : m.createdAt.seconds * 1000).toLocaleString('es-ES', { dateStyle: 'short', timeStyle: 'short' }) : ''}
                             </div>
                             <div style={{ padding: '9px 13px', borderRadius: '12px', fontSize: '13px', color: 'var(--text-primary)', border: '1px solid var(--border-color)', background: m.isInternal ? 'var(--warning-soft)' : isMine ? 'var(--accent-soft)' : 'var(--surface-2)' }}>
                               {m.message && <div style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{m.message}</div>}
