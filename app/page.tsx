@@ -62,6 +62,18 @@ const priorityConfig = PRIORITY_CONFIG;
 const AREAS = ["Pauta", "Redes Sociales", "CMR"];
 const CHANNELS = ["Facebook", "Instagram", "Página Web", "CMR"];
 
+// ── Tipo de solicitud: naturaleza del arte, para contabilidad del equipo ──
+type RequestKind = "Nueva Línea Gráfica" | "Giveaway" | "Línea Gráfica Existente";
+const REQUEST_KINDS: { id: RequestKind; label: string; emoji: string; desc: string; text: string; bg: string }[] = [
+  { id: "Nueva Línea Gráfica",     label: "Nueva Línea Gráfica",     emoji: "🎨", desc: "Concepto/identidad visual desde cero", text: "#7c3aed", bg: "#f3e8ff" },
+  { id: "Giveaway",                label: "Giveaway",                emoji: "🎁", desc: "Sorteo / dinámica de premios",        text: "#b54708", bg: "#fdf3e7" },
+  { id: "Línea Gráfica Existente", label: "Línea Gráfica Existente", emoji: "🔁", desc: "Adaptación de una línea ya creada",    text: "#0b6bcb", bg: "#e8f1fc" },
+];
+const KIND_CONFIG: Record<RequestKind, { text: string; bg: string; emoji: string }> = REQUEST_KINDS.reduce(
+  (acc, k) => { acc[k.id] = { text: k.text, bg: k.bg, emoji: k.emoji }; return acc; },
+  {} as Record<RequestKind, { text: string; bg: string; emoji: string }>,
+);
+
 const DIMENSION_OPTIONS = [
   // ── Redes sociales (sugerido por defecto: Instagram Feed vertical) ──
   { key: "Post de redes",      label: "Post de redes",      sub: "Pieza para redes sociales" },
@@ -143,6 +155,7 @@ type RequestType = {
   title: string;
   copy: string;
   format: string;
+  requestKind?: RequestKind;      // Nueva Línea Gráfica | Giveaway | Línea Gráfica Existente
   dimensions: string[];
   countries: string[];
   requestDate: string;
@@ -268,6 +281,7 @@ export default function GanaPlayMainApp() {
   const [titleStr, setTitleStr] = useState("");
   const [copyStr, setCopyStr] = useState("");
   const [format, setFormat] = useState("static");
+  const [requestKind, setRequestKind] = useState<RequestKind>("Nueva Línea Gráfica");
   const [deliveryDate, setDeliveryDate] = useState("");
   const [dimensions, setDimensions] = useState<string[]>([]);
   const [countries, setCountries] = useState<string[]>([]);
@@ -295,6 +309,9 @@ export default function GanaPlayMainApp() {
 
   // ── Sub-vista del Centro de Diseño ──
   const [designerView, setDesignerView] = useState<'Disponibles' | 'Mías' | 'En proceso' | 'Entregadas'>('Disponibles');
+  // Contabilidad: alcance (equipo vs propio) y filtro por tipo de solicitud.
+  const [statsScope, setStatsScope] = useState<'Equipo' | 'Mías'>('Equipo');
+  const [kindFilter, setKindFilter] = useState<RequestKind | 'Todos'>('Todos');
 
   const [chatOpen, setChatOpen] = useState(false);
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>(() => {
@@ -573,6 +590,7 @@ export default function GanaPlayMainApp() {
       title: titleStr || "Nuevo Requerimiento",
       copy: copyStr,
       format,
+      requestKind,
       dimensions,
       countries,
       requestDate: now.split("T")[0],
@@ -594,7 +612,7 @@ export default function GanaPlayMainApp() {
     try {
       await setDoc(doc(db, "requests", nextId), { ...newReq, updatedAt: serverTimestamp() });
       setTitleStr(""); setCopyStr(""); setDimensions([]); setCountries([]); setChannels([]);
-      setReferenceImgs([]); setPriority("Medio"); setFormat("static");
+      setReferenceImgs([]); setPriority("Medio"); setFormat("static"); setRequestKind("Nueva Línea Gráfica");
       setRequesterName(""); setRequesterEmail(""); setObjective(""); setArea(AREAS[0]);
       setInitialComment("");
       setInitialCommentImgs([]);
@@ -1982,14 +2000,86 @@ export default function GanaPlayMainApp() {
           const viewMap: Record<typeof designerView, RequestType[]> = {
             'Disponibles': available, 'Mías': mine, 'En proceso': inProgress, 'Entregadas': delivered,
           };
-          const list = [...viewMap[designerView]].sort((a, b) => (a.deliveryDate || '').localeCompare(b.deliveryDate || ''));
+          const matchesKind = (r: RequestType) => kindFilter === 'Todos' || r.requestKind === kindFilter;
+          const list = [...viewMap[designerView]].filter(matchesKind).sort((a, b) => (a.deliveryDate || '').localeCompare(b.deliveryDate || ''));
           const activity = DESIGNER_USERS.map(d => ({
             name: d,
             working: requests.filter(r => r.assignedTo === d && r.status !== 'Publicado' && r.status !== 'Denegado' && r.status !== 'Declinada'),
           }));
+
+          // ── Contabilidad: alcance equipo vs. propio ──
+          const statsBase = statsScope === 'Mías' ? mine : requests;
+          const statusCount = (s: RequestStatus) => statsBase.filter(r => r.status === s).length;
+          const statTiles = [
+            { label: 'Total', value: statsBase.length, color: 'var(--text-primary)', bg: 'var(--surface-1)' },
+            { label: 'Publicadas', value: statusCount('Publicado'), color: STATUS_TEXT_COLORS['Publicado'], bg: STATUS_COLORS['Publicado'] },
+            { label: 'En proceso', value: statsBase.filter(r => r.status === 'En Proceso' || r.status === 'Planeando').length, color: STATUS_TEXT_COLORS['En Proceso'], bg: STATUS_COLORS['En Proceso'] },
+            { label: 'Pendientes', value: statusCount('Pendiente'), color: priorityConfig['Alto'].text, bg: priorityConfig['Alto'].bg },
+            { label: 'Declinadas', value: statusCount('Declinada'), color: STATUS_TEXT_COLORS['Declinada'], bg: STATUS_COLORS['Declinada'] },
+          ];
+          const kindStats = REQUEST_KINDS.map(k => {
+            const rows = statsBase.filter(r => r.requestKind === k.id);
+            return { ...k, total: rows.length, done: rows.filter(r => r.status === 'Publicado').length };
+          });
+          const sinTipo = statsBase.filter(r => !r.requestKind).length;
           return (
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 320px', gap: '20px' }}>
               <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                {/* Contabilidad: por estado y por tipo de solicitud */}
+                <div className="card" style={{ padding: '16px' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '10px', marginBottom: '14px', flexWrap: 'wrap' }}>
+                    <h3 style={{ margin: 0, fontSize: '14px', color: 'var(--accent-dark)', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      <List size={15} /> Contabilidad
+                    </h3>
+                    <div style={{ display: 'flex', gap: '6px' }}>
+                      {(['Equipo', 'Mías'] as const).map(s => (
+                        <div key={s} onClick={() => setStatsScope(s)}
+                          style={{ ...navItemStyle(statsScope === s), fontSize: '11px', padding: '5px 12px' }}>
+                          {s === 'Equipo' ? 'Todo el equipo' : 'Solo mías'}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Conteo por estado */}
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(96px, 1fr))', gap: '8px', marginBottom: '16px' }}>
+                    {statTiles.map(t => (
+                      <div key={t.label} style={{ background: t.bg, borderRadius: '12px', padding: '12px', border: '1px solid var(--border-color)' }}>
+                        <div style={{ fontSize: '22px', fontWeight: 800, color: t.color, lineHeight: 1 }}>{t.value}</div>
+                        <div style={{ fontSize: '11px', color: 'var(--text-secondary)', marginTop: '4px', fontWeight: 600 }}>{t.label}</div>
+                      </div>
+                    ))}
+                  </div>
+
+                  {/* Conteo por tipo (clic para filtrar la lista de abajo) */}
+                  <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '8px' }}>Por tipo de solicitud</div>
+                  <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                    <div onClick={() => setKindFilter('Todos')}
+                      style={{ cursor: 'pointer', padding: '8px 12px', borderRadius: '10px', border: `2px solid ${kindFilter === 'Todos' ? 'var(--accent-color)' : 'var(--border-color)'}`, background: kindFilter === 'Todos' ? 'var(--accent-soft)' : 'var(--surface-1)', fontSize: '12px', fontWeight: 700, color: 'var(--text-primary)' }}>
+                      Todas ({statsBase.length})
+                    </div>
+                    {kindStats.map(k => {
+                      const active = kindFilter === k.id;
+                      return (
+                        <div key={k.id} onClick={() => setKindFilter(active ? 'Todos' : k.id)}
+                          title={`${k.total} en total · ${k.done} publicadas`}
+                          style={{ cursor: 'pointer', padding: '8px 12px', borderRadius: '10px', border: `2px solid ${active ? k.text : 'var(--border-color)'}`, background: active ? k.bg : 'var(--surface-1)' }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', fontWeight: 700, color: active ? k.text : 'var(--text-primary)' }}>
+                            <span>{k.emoji}</span> {k.label}
+                            <span style={{ fontWeight: 800 }}>{k.total}</span>
+                          </div>
+                          <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '2px' }}>{k.done} publicadas</div>
+                        </div>
+                      );
+                    })}
+                    {sinTipo > 0 && (
+                      <div style={{ padding: '8px 12px', borderRadius: '10px', border: '2px solid var(--border-color)', background: 'var(--surface-1)', fontSize: '12px', color: 'var(--text-muted)' }}>
+                        Sin tipo ({sinTipo})
+                      </div>
+                    )}
+                  </div>
+                </div>
+
                 {/* Actividad del equipo en tiempo real */}
                 <div className="card" style={{ padding: '16px' }}>
                   <h3 style={{ margin: '0 0 12px', fontSize: '14px', color: 'var(--accent-dark)', display: 'flex', alignItems: 'center', gap: '8px' }}>
@@ -2014,13 +2104,19 @@ export default function GanaPlayMainApp() {
 
                 {/* Solicitudes con sub-vistas y acciones de 1 clic */}
                 <div className="card" style={{ padding: '16px' }}>
-                  <div style={{ display: 'flex', gap: '6px', marginBottom: '14px', flexWrap: 'wrap' }}>
+                  <div style={{ display: 'flex', gap: '6px', marginBottom: '14px', flexWrap: 'wrap', alignItems: 'center' }}>
                     {(['Disponibles', 'Mías', 'En proceso', 'Entregadas'] as const).map(v => (
                       <div key={v} onClick={() => setDesignerView(v)}
                         style={{ ...navItemStyle(designerView === v), fontSize: '12px', padding: '7px 12px' }}>
-                        {v} ({viewMap[v].length})
+                        {v} ({viewMap[v].filter(matchesKind).length})
                       </div>
                     ))}
+                    {kindFilter !== 'Todos' && (
+                      <div onClick={() => setKindFilter('Todos')} title="Quitar filtro de tipo"
+                        style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', cursor: 'pointer', marginLeft: 'auto', padding: '6px 10px', borderRadius: '10px', background: KIND_CONFIG[kindFilter].bg, color: KIND_CONFIG[kindFilter].text, fontSize: '11px', fontWeight: 700 }}>
+                        {KIND_CONFIG[kindFilter].emoji} {kindFilter} <X size={12} />
+                      </div>
+                    )}
                   </div>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
                     {list.length === 0 && (
@@ -2038,6 +2134,7 @@ export default function GanaPlayMainApp() {
                           <div style={{ marginTop: '6px', display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
                             <span className="badge" style={{ background: STATUS_COLORS[req.status], color: STATUS_TEXT_COLORS[req.status], fontSize: '10px' }}>{req.status}</span>
                             <span className="badge" style={{ background: priorityConfig[req.priority ?? 'Medio'].bg, color: priorityConfig[req.priority ?? 'Medio'].text, fontSize: '10px' }}>{req.priority ?? 'Medio'}</span>
+                            {req.requestKind && <span className="badge" style={{ background: KIND_CONFIG[req.requestKind].bg, color: KIND_CONFIG[req.requestKind].text, fontSize: '10px' }}>{KIND_CONFIG[req.requestKind].emoji} {req.requestKind}</span>}
                             {req.assignedTo && <span style={{ fontSize: '11px', color: 'var(--accent-color)' }}><User size={10} style={{ display: 'inline', marginRight: '3px' }} />{req.assignedTo}</span>}
                             {req.creatives.length > 0 && <span style={{ fontSize: '11px', color: 'var(--text-secondary)' }}><ImageIcon size={11} style={{ display: 'inline', marginRight: '2px' }} />{req.creatives.length}</span>}
                           </div>
@@ -2083,7 +2180,8 @@ export default function GanaPlayMainApp() {
           const filtered = requests.filter(r => {
             const matchSearch = searchQuery === '' || r.id.toLowerCase().includes(searchQuery.toLowerCase()) || r.title.toLowerCase().includes(searchQuery.toLowerCase());
             const matchStatus = statusFilter === 'Todos' || r.status === statusFilter;
-            return matchSearch && matchStatus;
+            const matchKind = kindFilter === 'Todos' || r.requestKind === kindFilter;
+            return matchSearch && matchStatus && matchKind;
           });
           return (
             <div>
@@ -2096,6 +2194,10 @@ export default function GanaPlayMainApp() {
                 <select value={statusFilter} onChange={e => setStatusFilter(e.target.value as RequestStatus | "Todos")} style={{ width: 'auto', minWidth: '180px' }}>
                   <option value="Todos">Todos los estados</option>
                   {(["Publicado", "En Proceso", "Planeando", "Pendiente", "Denegado"] as RequestStatus[]).map(s => <option key={s} value={s}>{s}</option>)}
+                </select>
+                <select value={kindFilter} onChange={e => setKindFilter(e.target.value as RequestKind | "Todos")} style={{ width: 'auto', minWidth: '180px' }}>
+                  <option value="Todos">Todos los tipos</option>
+                  {REQUEST_KINDS.map(k => <option key={k.id} value={k.id}>{k.emoji} {k.label} ({requests.filter(r => r.requestKind === k.id).length})</option>)}
                 </select>
                 <span style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>{filtered.length} resultado{filtered.length !== 1 ? 's' : ''}</span>
               </div>
@@ -2115,6 +2217,7 @@ export default function GanaPlayMainApp() {
                           <span style={{ fontSize: '15px', fontWeight: 700, color: 'var(--text-primary)' }}>{req.title}</span>
                           <span className="badge" style={{ background: STATUS_COLORS[req.status], color: STATUS_TEXT_COLORS[req.status], fontSize: '10px' }}>{req.status}</span>
                           <span className="badge" style={{ background: priorityConfig[req.priority ?? 'Medio'].bg, color: priorityConfig[req.priority ?? 'Medio'].text, fontSize: '10px' }}>{req.priority ?? 'Medio'}</span>
+                          {req.requestKind && <span className="badge" style={{ background: KIND_CONFIG[req.requestKind].bg, color: KIND_CONFIG[req.requestKind].text, fontSize: '10px' }}>{KIND_CONFIG[req.requestKind].emoji} {req.requestKind}</span>}
                         </div>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '16px', fontSize: '13px', color: 'var(--text-secondary)' }}>
                           <span>{req.countries.join(' / ')}</span>
@@ -2442,6 +2545,29 @@ export default function GanaPlayMainApp() {
               </div>
 
               <div className="form-group">
+                <label className="label">Tipo de solicitud *</label>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: '10px' }}>
+                  {REQUEST_KINDS.map(k => {
+                    const active = requestKind === k.id;
+                    return (
+                      <div key={k.id} onClick={() => setRequestKind(k.id)}
+                        style={{
+                          cursor: 'pointer', padding: '12px 14px', borderRadius: '12px',
+                          border: `2px solid ${active ? k.text : 'var(--border-color)'}`,
+                          background: active ? k.bg : 'var(--surface-1)',
+                          transition: 'all .12s',
+                        }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontWeight: 800, fontSize: '13px', color: active ? k.text : 'var(--text-primary)' }}>
+                          <span style={{ fontSize: '18px' }}>{k.emoji}</span> {k.label}
+                        </div>
+                        <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '4px' }}>{k.desc}</div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <div className="form-group">
                 <label className="label">Países destino *</label>
                 <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap' }}>
                   {["El Salvador", "Guatemala"].map(country => (
@@ -2616,6 +2742,11 @@ export default function GanaPlayMainApp() {
                 <span className="fmt-pill" style={{ flexShrink: 0 }}>
                   {selectedReq.format === 'video' ? '🎬 Video' : selectedReq.format === 'gif' ? '✨ GIF' : selectedReq.format === 'carousel' ? '🔄 Carrusel' : selectedReq.format === 'banner' ? '📐 Banner' : selectedReq.format === 'display' ? '🖥️ Display' : selectedReq.format === 'email' ? '📧 Email' : '🖼️ Estático'}
                 </span>
+                {selectedReq.requestKind && (
+                  <span className="badge" style={{ flexShrink: 0, background: KIND_CONFIG[selectedReq.requestKind].bg, color: KIND_CONFIG[selectedReq.requestKind].text, fontSize: '11px', fontWeight: 700 }}>
+                    {KIND_CONFIG[selectedReq.requestKind].emoji} {selectedReq.requestKind}
+                  </span>
+                )}
               </div>
               <X size={22} onClick={() => setModalOpen(false)} style={{ cursor: 'pointer', color: 'var(--text-secondary)', flexShrink: 0 }} />
             </div>

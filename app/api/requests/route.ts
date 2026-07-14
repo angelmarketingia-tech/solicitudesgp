@@ -24,6 +24,7 @@ const FS_BASE = `https://firestore.googleapis.com/v1/projects/${PROJECT_ID}/data
 
 const VALID_PRIORITIES = ["Bajo", "Medio", "Alto", "Urgente"];
 const VALID_AREAS = ["Pauta", "Redes Sociales", "CMR"];
+const VALID_KINDS = ["Nueva Línea Gráfica", "Giveaway", "Línea Gráfica Existente"];
 
 type IncomingRequest = {
   title?: string;
@@ -39,6 +40,7 @@ type IncomingRequest = {
   requesterName?: string;
   requesterEmail?: string;
   referenceImage?: string;
+  requestKind?: string;
   source?: string;
 };
 
@@ -181,6 +183,7 @@ export async function POST(req: Request) {
       updatedAt: now,
     };
     if (body.referenceImage) newReq.referenceImage = body.referenceImage;
+    if (VALID_KINDS.includes(body.requestKind || "")) newReq.requestKind = body.requestKind;
 
     await createDoc("requests", id, newReq);
 
