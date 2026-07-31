@@ -7,7 +7,7 @@ import {
   ChevronRight, CalendarDays, Maximize2, X,
   CheckCircle2, Clock,
   LogOut, AlertCircle, UploadCloud, Bot, Send, Trash2,
-  Download, Bell, Sparkles, Target, Building2, ClipboardList, AtSign, Users
+  Download, Bell, Sparkles, Target, Building2, ClipboardList, AtSign, Users, Megaphone
 } from 'lucide-react';
 
 // ─── Firebase ───
@@ -21,6 +21,7 @@ import { emailForUser, DEFAULT_TRAFFICKER_EMAIL } from '@/lib/users';
 import { compressImageToDataUrl, validateImage } from '@/lib/image';
 import SocialMediaTab from './SocialMediaTab';
 import InfluencerModule from './InfluencerModule';
+import PromoModule from './PromoModule';
 
 // ─── Configuración visual de estados y prioridades (tema claro GanaPlay) ───
 const STATUS_COLORS: Record<string, string> = {
@@ -1855,6 +1856,7 @@ export default function GanaPlayMainApp() {
           <div style={navItemStyle(activeTab === 'Historial')} onClick={() => setActiveTab('Historial')}><Clock size={15} /> Historial</div>
           <div style={navItemStyle(activeTab === 'Tabla Principal')} onClick={() => setActiveTab('Tabla Principal')}><List size={15} /> Tabla</div>
           <div style={navItemStyle(activeTab === 'Redes Sociales')} onClick={() => setActiveTab('Redes Sociales')}><CalendarDays size={15} /> Redes Sociales</div>
+          <div style={navItemStyle(activeTab === 'Promocionales')} onClick={() => setActiveTab('Promocionales')}><Megaphone size={15} /> Promocionales</div>
           {(role === 'admin' || role === 'cm') && (
             <div style={navItemStyle(activeTab === 'Contenido Influencers')} onClick={() => setActiveTab('Contenido Influencers')}><Users size={15} /> Contenido Influencers</div>
           )}
@@ -2396,6 +2398,10 @@ export default function GanaPlayMainApp() {
 
         {activeTab === 'Contenido Influencers' && (role === 'admin' || role === 'cm') && (
           <InfluencerModule role={role} userName={userName} addToast={addToast} />
+        )}
+
+        {activeTab === 'Promocionales' && (
+          <PromoModule role={role} userName={userName} addToast={addToast} />
         )}
       </div>
 

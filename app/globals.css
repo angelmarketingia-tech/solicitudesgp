@@ -223,6 +223,8 @@ input[type="checkbox"], input[type="radio"] {
   to { transform: rotate(360deg); }
 }
 
+.spin { animation: spin 1s linear infinite; }
+
 .loading-overlay {
   position: fixed;
   inset: 0;
