@@ -165,6 +165,11 @@ export default function PromoModule({ role, userName, addToast }: Props) {
   };
 
   const download = (p: Promo) => {
+    // Seguridad: solo esquemas seguros. Evita ejecución de `javascript:` u otros
+    // esquemas si el fileUrl fuera manipulado.
+    if (!/^https:\/\//i.test(p.fileUrl) && !/^data:(image|video|application)\//i.test(p.fileUrl)) {
+      addToast("Archivo no válido.", "error"); return;
+    }
     const a = document.createElement("a");
     a.href = p.fileUrl; a.download = p.fileName || p.title; a.target = "_blank"; a.rel = "noreferrer";
     document.body.appendChild(a); a.click(); a.remove();

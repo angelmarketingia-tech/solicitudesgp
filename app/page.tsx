@@ -234,11 +234,13 @@ type NotificationItem = {
 };
 
 export default function GanaPlayMainApp() {
+  // Sesión: localStorage = "recordar" (persiste al cerrar); sessionStorage =
+  // solo esta pestaña. Se restaura de cualquiera de las dos.
   const [role, setRole] = useState<"admin" | "cm" | "designer" | "operator" | "administrative" | null>(() => {
-    try { return (sessionStorage.getItem('gp_role') as "admin" | "cm" | "designer" | "operator" | "administrative" | null) || null; } catch { return null; }
+    try { return ((localStorage.getItem('gp_role') || sessionStorage.getItem('gp_role')) as "admin" | "cm" | "designer" | "operator" | "administrative" | null) || null; } catch { return null; }
   });
   const [userName, setUserName] = useState<string>(() => {
-    try { return sessionStorage.getItem('gp_userName') || ''; } catch { return ''; }
+    try { return localStorage.getItem('gp_userName') || sessionStorage.getItem('gp_userName') || ''; } catch { return ''; }
   });
 
   const [toasts, setToasts] = useState<{ id: number; msg: string; type: 'success' | 'error' | 'info' }[]>([]);
@@ -252,6 +254,10 @@ export default function GanaPlayMainApp() {
   const [loadingData, setLoadingData] = useState(true);
 
   // ── Login ──
+  // Acceso principal: correo corporativo. "Acceso por rol" queda como respaldo.
+  const [loginMode, setLoginMode] = useState<'email' | 'role'>('email');
+  const [loginEmail, setLoginEmail] = useState(() => { try { return localStorage.getItem('gp_email') || ''; } catch { return ''; } });
+  const [rememberMe, setRememberMe] = useState(() => { try { return localStorage.getItem('gp_remember') !== '0'; } catch { return true; } });
   const [loginRole, setLoginRole] = useState<"admin" | "cm" | "designer" | "operator" | "administrative" | null>(null);
   const [loginDesignerName, setLoginDesignerName] = useState("");
   const [loginOperatorName, setLoginOperatorName] = useState("");
@@ -278,7 +284,7 @@ export default function GanaPlayMainApp() {
 
   // ── Tablero ──
   const [activeTab, setActiveTab] = useState(() => {
-    try { return sessionStorage.getItem('gp_role') === 'designer' ? 'Equipo Diseño' : 'Tablero Kanban'; }
+    try { return (localStorage.getItem('gp_role') || sessionStorage.getItem('gp_role')) === 'designer' ? 'Equipo Diseño' : 'Tablero Kanban'; }
     catch { return 'Tablero Kanban'; }
   });
   const [modalOpen, setModalOpen] = useState(false);
@@ -1552,35 +1558,29 @@ export default function GanaPlayMainApp() {
   // ─── Login unificado: la contraseña se valida en el servidor ───
   const handleLogin = useCallback(async () => {
     setLoginError("");
-    if (!loginRole) return;
-    if (loginRole === "designer" && !loginDesignerName) {
-      setLoginError("Selecciona tu nombre.");
-      return;
-    }
-    if (loginRole === "operator" && !loginOperatorName) {
-      setLoginError("Selecciona tu nombre.");
-      return;
-    }
-    if (loginRole === "administrative" && !loginAdministrativeName) {
-      setLoginError("Selecciona tu nombre.");
-      return;
-    }
-    if (!loginPass) {
-      setLoginError("Ingresa la contraseña.");
-      return;
+    // Cuerpo de la petición según el modo de acceso.
+    let body: Record<string, string>;
+    if (loginMode === 'email') {
+      if (!loginEmail.trim()) { setLoginError("Ingresa tu correo corporativo."); return; }
+      if (!loginPass) { setLoginError("Ingresa tu contraseña."); return; }
+      body = { email: loginEmail.trim(), password: loginPass };
+    } else {
+      if (!loginRole) return;
+      if (loginRole === "designer" && !loginDesignerName) { setLoginError("Selecciona tu nombre."); return; }
+      if (loginRole === "operator" && !loginOperatorName) { setLoginError("Selecciona tu nombre."); return; }
+      if (loginRole === "administrative" && !loginAdministrativeName) { setLoginError("Selecciona tu nombre."); return; }
+      if (!loginPass) { setLoginError("Ingresa la contraseña."); return; }
+      body = {
+        role: loginRole, password: loginPass,
+        designerName: loginDesignerName, operatorName: loginOperatorName, administrativeName: loginAdministrativeName,
+      };
     }
     setLoginLoading(true);
     try {
       const res = await fetch("/api/auth", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          role: loginRole,
-          password: loginPass,
-          designerName: loginDesignerName,
-          operatorName: loginOperatorName,
-          administrativeName: loginAdministrativeName,
-        }),
+        body: JSON.stringify(body),
       });
       const data = await res.json();
       if (!res.ok || !data.ok) {
@@ -1591,16 +1591,33 @@ export default function GanaPlayMainApp() {
       setUserName(data.userName);
       // Los diseñadores entran directo a su Centro de Diseño (menos clics).
       setActiveTab(data.role === "designer" ? "Equipo Diseño" : "Tablero Kanban");
+      // Persistencia de sesión:
+      //  - "Recordar" → localStorage (sigue logueado al reabrir; no reescribe nada).
+      //  - Sin recordar → solo sessionStorage (se cierra al cerrar la pestaña).
+      // NUNCA guardamos la contraseña en texto plano; mantener la sesión cumple
+      // el objetivo de no volver a escribir credenciales de forma más segura.
       try {
         sessionStorage.setItem("gp_role", data.role);
         sessionStorage.setItem("gp_userName", data.userName);
+        localStorage.removeItem("gp_role");
+        localStorage.removeItem("gp_userName");
+        if (rememberMe) {
+          localStorage.setItem("gp_role", data.role);
+          localStorage.setItem("gp_userName", data.userName);
+          localStorage.setItem("gp_remember", "1");
+          if (loginMode === 'email') localStorage.setItem("gp_email", loginEmail.trim());
+        } else {
+          localStorage.setItem("gp_remember", "0");
+          localStorage.removeItem("gp_email");
+        }
       } catch {}
+      setLoginPass("");
     } catch {
       setLoginError("❌ Error de red. Verifica tu conexión e intenta de nuevo.");
     } finally {
       setLoginLoading(false);
     }
-  }, [loginRole, loginPass, loginDesignerName, loginOperatorName, loginAdministrativeName]);
+  }, [loginMode, loginEmail, loginRole, loginPass, loginDesignerName, loginOperatorName, loginAdministrativeName, rememberMe]);
 
   const handleLogout = () => {
     setRole(null); setUserName(""); setLoginPass("");
@@ -1608,8 +1625,12 @@ export default function GanaPlayMainApp() {
     setLoginError(""); setLoginRole(null); setActiveTab('Tablero Kanban');
     setNotifPanelOpen(false);
     try {
+      // Cierra la sesión en ambos almacenes; conserva el correo recordado para
+      // autocompletarlo la próxima vez (no la contraseña).
       sessionStorage.removeItem('gp_role');
       sessionStorage.removeItem('gp_userName');
+      localStorage.removeItem('gp_role');
+      localStorage.removeItem('gp_userName');
     } catch {}
   };
 
@@ -1680,78 +1701,32 @@ export default function GanaPlayMainApp() {
             <p style={{ color: 'var(--text-secondary)', fontSize: '14px', margin: 0 }}>Plataforma de solicitudes creativas</p>
           </div>
 
-          <div style={{ marginBottom: '20px' }}>
-            <p style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '1.5px', textAlign: 'center', marginBottom: '12px' }}>Selecciona tu rol</p>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '10px' }}>
-              {ROLE_CARDS.map(card => {
-                const active = loginRole === card.key;
-                return (
-                  <div key={card.key}
-                    onClick={() => { setLoginRole(card.key as "admin" | "cm" | "designer" | "operator" | "administrative"); setLoginPass(''); setLoginDesignerName(''); setLoginOperatorName(''); setLoginAdministrativeName(''); setLoginError(''); }}
-                    style={{
-                      background: active ? 'var(--accent-soft)' : 'var(--panel-bg)',
-                      border: `1.5px solid ${active ? 'var(--accent-color)' : 'var(--border-color)'}`,
-                      borderRadius: '14px', padding: '16px 8px 14px', cursor: 'pointer', textAlign: 'center',
-                      transition: 'all 0.2s ease',
-                      boxShadow: active ? '0 6px 18px var(--accent-glow)' : 'var(--shadow-sm)',
-                    }}
-                  >
-                    <div style={{ fontSize: '20px', marginBottom: '6px' }}>{card.icon}</div>
-                    <div style={{ fontWeight: 700, fontSize: '12px', color: active ? 'var(--accent-dark)' : 'var(--text-primary)', lineHeight: 1.3, marginBottom: '3px' }}>{card.label}</div>
-                    <div style={{ fontSize: '10px', color: 'var(--text-muted)' }}>{card.sub}</div>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-
-          {loginRole && selectedCard && (
-            <div className="card" style={{ padding: '26px' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '20px' }}>
-                <div style={{ width: '34px', height: '34px', borderRadius: '10px', background: 'var(--accent-color)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '15px' }}>{selectedCard.icon}</div>
-                <div>
-                  <div style={{ fontSize: '14px', fontWeight: 700, color: 'var(--accent-dark)', lineHeight: 1.2 }}>Ingresar como {selectedCard.label}</div>
-                  <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Acceso con contraseña</div>
-                </div>
+          {loginMode === 'email' ? (
+            /* ── Acceso corporativo por correo (principal) ── */
+            <div className="card" style={{ padding: '28px' }}>
+              <div style={{ textAlign: 'center', marginBottom: '22px' }}>
+                <div style={{ fontSize: '15px', fontWeight: 800, color: 'var(--accent-dark)' }}>Acceso corporativo</div>
+                <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '3px' }}>Inicia sesión con tu correo <strong>@ganaplay.com</strong></div>
               </div>
 
-              {loginRole === 'designer' && (
-                <div style={{ marginBottom: '14px' }}>
-                  <label className="label">Tu nombre</label>
-                  <select value={loginDesignerName} onChange={e => setLoginDesignerName(e.target.value)}>
-                    <option value="">— Selecciona tu nombre —</option>
-                    {DESIGNER_USERS.map(u => <option key={u} value={u}>{u}</option>)}
-                  </select>
-                </div>
-              )}
-
-              {loginRole === 'operator' && (
-                <div style={{ marginBottom: '14px' }}>
-                  <label className="label">Tu nombre</label>
-                  <select value={loginOperatorName} onChange={e => setLoginOperatorName(e.target.value)}>
-                    <option value="">— Selecciona tu nombre —</option>
-                    {OPERATOR_USER_LIST.map(u => <option key={u} value={u}>{u}</option>)}
-                  </select>
-                </div>
-              )}
-
-              {loginRole === 'administrative' && (
-                <div style={{ marginBottom: '14px' }}>
-                  <label className="label">Tu nombre</label>
-                  <select value={loginAdministrativeName} onChange={e => setLoginAdministrativeName(e.target.value)}>
-                    <option value="">— Selecciona tu nombre —</option>
-                    {ADMINISTRATIVE_USER_LIST.map(u => <option key={u} value={u}>{u}</option>)}
-                  </select>
-                </div>
-              )}
+              <div style={{ marginBottom: '14px' }}>
+                <label className="label">Correo corporativo</label>
+                <input type="email" autoComplete="username" placeholder="nombre.apellido@ganaplay.com" autoFocus
+                  value={loginEmail} onChange={e => setLoginEmail(e.target.value)}
+                  onKeyDown={e => { if (e.key === 'Enter' && !loginLoading) handleLogin(); }} />
+              </div>
 
               <div style={{ marginBottom: '16px' }}>
                 <label className="label">Contraseña</label>
-                <input type="password" placeholder="••••••••••••"
+                <input type="password" autoComplete="current-password" placeholder="••••••••••••"
                   value={loginPass} onChange={e => setLoginPass(e.target.value)}
-                  onKeyDown={e => { if (e.key === 'Enter' && !loginLoading) handleLogin(); }}
-                />
+                  onKeyDown={e => { if (e.key === 'Enter' && !loginLoading) handleLogin(); }} />
               </div>
+
+              <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px', color: 'var(--text-secondary)', marginBottom: '18px', cursor: 'pointer', width: 'auto' }}>
+                <input type="checkbox" checked={rememberMe} onChange={e => setRememberMe(e.target.checked)} style={{ width: 'auto' }} />
+                Recordar mis datos y mantener la sesión iniciada
+              </label>
 
               {loginError && (
                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '10px 14px', background: 'var(--danger-soft)', border: '1px solid #f5c6c2', borderRadius: '10px', marginBottom: '14px' }}>
@@ -1761,17 +1736,116 @@ export default function GanaPlayMainApp() {
 
               <button className="btn" disabled={loginLoading} onClick={handleLogin}
                 style={{ width: '100%', padding: '14px', fontSize: '14px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
-                {loginLoading ? 'Verificando…' : 'Acceder al sistema →'}
+                {loginLoading ? 'Verificando…' : 'Iniciar sesión →'}
               </button>
+
+              <div style={{ textAlign: 'center', marginTop: '16px' }}>
+                <button onClick={() => { setLoginMode('role'); setLoginError(''); }}
+                  style={{ background: 'none', border: 'none', color: 'var(--text-muted)', fontSize: '12px', cursor: 'pointer', textDecoration: 'underline', width: 'auto', padding: 0 }}>
+                  Acceso por rol (equipo interno)
+                </button>
+              </div>
 
               <p style={{ textAlign: 'center', fontSize: '10px', color: 'var(--text-muted)', marginTop: '14px', marginBottom: 0 }}>
                 🔒 Acceso seguro · GanaPlay {new Date().getFullYear()}
               </p>
             </div>
-          )}
+          ) : (
+            /* ── Acceso por rol (respaldo del método anterior) ── */
+            <>
+              <div style={{ marginBottom: '20px' }}>
+                <p style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '1.5px', textAlign: 'center', marginBottom: '12px' }}>Selecciona tu rol</p>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '10px' }}>
+                  {ROLE_CARDS.map(card => {
+                    const active = loginRole === card.key;
+                    return (
+                      <div key={card.key}
+                        onClick={() => { setLoginRole(card.key as "admin" | "cm" | "designer" | "operator" | "administrative"); setLoginPass(''); setLoginDesignerName(''); setLoginOperatorName(''); setLoginAdministrativeName(''); setLoginError(''); }}
+                        style={{
+                          background: active ? 'var(--accent-soft)' : 'var(--panel-bg)',
+                          border: `1.5px solid ${active ? 'var(--accent-color)' : 'var(--border-color)'}`,
+                          borderRadius: '14px', padding: '16px 8px 14px', cursor: 'pointer', textAlign: 'center',
+                          transition: 'all 0.2s ease',
+                          boxShadow: active ? '0 6px 18px var(--accent-glow)' : 'var(--shadow-sm)',
+                        }}
+                      >
+                        <div style={{ fontSize: '20px', marginBottom: '6px' }}>{card.icon}</div>
+                        <div style={{ fontWeight: 700, fontSize: '12px', color: active ? 'var(--accent-dark)' : 'var(--text-primary)', lineHeight: 1.3, marginBottom: '3px' }}>{card.label}</div>
+                        <div style={{ fontSize: '10px', color: 'var(--text-muted)' }}>{card.sub}</div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
 
-          {!loginRole && (
-            <p style={{ textAlign: 'center', fontSize: '12px', color: 'var(--text-muted)', marginTop: '18px' }}>© {new Date().getFullYear()} GanaPlay · Todos los derechos reservados</p>
+              {loginRole && selectedCard && (
+                <div className="card" style={{ padding: '26px' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '20px' }}>
+                    <div style={{ width: '34px', height: '34px', borderRadius: '10px', background: 'var(--accent-color)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '15px' }}>{selectedCard.icon}</div>
+                    <div>
+                      <div style={{ fontSize: '14px', fontWeight: 700, color: 'var(--accent-dark)', lineHeight: 1.2 }}>Ingresar como {selectedCard.label}</div>
+                      <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Acceso con contraseña</div>
+                    </div>
+                  </div>
+
+                  {loginRole === 'designer' && (
+                    <div style={{ marginBottom: '14px' }}>
+                      <label className="label">Tu nombre</label>
+                      <select value={loginDesignerName} onChange={e => setLoginDesignerName(e.target.value)}>
+                        <option value="">— Selecciona tu nombre —</option>
+                        {DESIGNER_USERS.map(u => <option key={u} value={u}>{u}</option>)}
+                      </select>
+                    </div>
+                  )}
+
+                  {loginRole === 'operator' && (
+                    <div style={{ marginBottom: '14px' }}>
+                      <label className="label">Tu nombre</label>
+                      <select value={loginOperatorName} onChange={e => setLoginOperatorName(e.target.value)}>
+                        <option value="">— Selecciona tu nombre —</option>
+                        {OPERATOR_USER_LIST.map(u => <option key={u} value={u}>{u}</option>)}
+                      </select>
+                    </div>
+                  )}
+
+                  {loginRole === 'administrative' && (
+                    <div style={{ marginBottom: '14px' }}>
+                      <label className="label">Tu nombre</label>
+                      <select value={loginAdministrativeName} onChange={e => setLoginAdministrativeName(e.target.value)}>
+                        <option value="">— Selecciona tu nombre —</option>
+                        {ADMINISTRATIVE_USER_LIST.map(u => <option key={u} value={u}>{u}</option>)}
+                      </select>
+                    </div>
+                  )}
+
+                  <div style={{ marginBottom: '16px' }}>
+                    <label className="label">Contraseña</label>
+                    <input type="password" placeholder="••••••••••••"
+                      value={loginPass} onChange={e => setLoginPass(e.target.value)}
+                      onKeyDown={e => { if (e.key === 'Enter' && !loginLoading) handleLogin(); }}
+                    />
+                  </div>
+
+                  {loginError && (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '10px 14px', background: 'var(--danger-soft)', border: '1px solid #f5c6c2', borderRadius: '10px', marginBottom: '14px' }}>
+                      <span style={{ color: 'var(--danger)', fontSize: '12px', fontWeight: 600 }}>{loginError}</span>
+                    </div>
+                  )}
+
+                  <button className="btn" disabled={loginLoading} onClick={handleLogin}
+                    style={{ width: '100%', padding: '14px', fontSize: '14px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+                    {loginLoading ? 'Verificando…' : 'Acceder al sistema →'}
+                  </button>
+                </div>
+              )}
+
+              <div style={{ textAlign: 'center', marginTop: '16px' }}>
+                <button onClick={() => { setLoginMode('email'); setLoginRole(null); setLoginError(''); }}
+                  style={{ background: 'none', border: 'none', color: 'var(--text-muted)', fontSize: '12px', cursor: 'pointer', textDecoration: 'underline', width: 'auto', padding: 0 }}>
+                  ← Volver al acceso por correo
+                </button>
+              </div>
+            </>
           )}
         </div>
       </div>

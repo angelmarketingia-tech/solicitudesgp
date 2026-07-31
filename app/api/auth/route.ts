@@ -35,8 +35,49 @@ const DESIGNER_USERS = ["Juan David", "Eliana", "Verónica", "Caleb"];
 const OPERATOR_USERS = ["Quota", "Juan"];
 const ADMINISTRATIVE_USERS = ["Andres", "Sebastian", "Roberto"];
 
+type Role = "admin" | "cm" | "designer" | "operator" | "administrative";
+
+// ─── Directorio corporativo: correo → { rol, nombre } ────────────────────────
+// Cada persona entra con SU correo corporativo. La contraseña sigue siendo
+// compartida por tipo de acceso (Trafficker vs. general), así agregar o quitar
+// a alguien es solo editar este directorio — sin rotar contraseñas.
+//
+// Se puede sobrescribir/ampliar SIN desplegar código con la variable de entorno
+// AUTH_USERS (JSON): [{"email":"...","role":"designer","name":"..."}]
+const BUILTIN_DIRECTORY: { email: string; role: Role; name: string }[] = [
+  { email: "angel.vaca@ganaplay.com",       role: "admin",    name: "Trafficker" },
+  { email: "fernanda.monrroy@ganaplay.com", role: "cm",       name: "Community Manager" },
+  { email: "david.gutierrez@ganaplay.com",  role: "designer", name: "Juan David" },
+  { email: "eliana.izquierdo@ganaplay.com", role: "designer", name: "Eliana" },
+  { email: "veronica.marquez@ganaplay.com", role: "designer", name: "Verónica" },
+  { email: "caleb.guevara@ganaplay.com",    role: "designer", name: "Caleb" },
+];
+
+function buildDirectory(): Map<string, { role: Role; name: string }> {
+  const map = new Map<string, { role: Role; name: string }>();
+  for (const u of BUILTIN_DIRECTORY) map.set(u.email.toLowerCase(), { role: u.role, name: u.name });
+  // Override/extensión por variable de entorno (opcional).
+  try {
+    const raw = process.env.AUTH_USERS;
+    if (raw) {
+      const arr = JSON.parse(raw) as { email?: string; role?: Role; name?: string }[];
+      for (const u of arr) {
+        if (u.email && u.role && u.name) map.set(u.email.toLowerCase().trim(), { role: u.role, name: u.name });
+      }
+    }
+  } catch (e) {
+    console.error("[auth] AUTH_USERS mal formado (JSON inválido):", e);
+  }
+  return map;
+}
+
+const DIRECTORY = buildDirectory();
+
 type AuthBody = {
-  role?: "admin" | "cm" | "designer" | "operator" | "administrative";
+  // Nuevo: acceso corporativo por correo.
+  email?: string;
+  // Compatibilidad: acceso por rol (método anterior, aún soportado).
+  role?: Role;
   password?: string;
   designerName?: string;
   operatorName?: string;
@@ -69,7 +110,24 @@ export async function POST(req: Request) {
       );
     }
 
-    const { role, password, designerName, operatorName, administrativeName }: AuthBody = await req.json();
+    const { email, role, password, designerName, operatorName, administrativeName }: AuthBody = await req.json();
+
+    // ── Acceso corporativo por correo (método preferido) ──
+    if (email) {
+      if (!password) {
+        return NextResponse.json({ ok: false, error: "Ingresa tu contraseña." }, { status: 400 });
+      }
+      const entry = DIRECTORY.get(String(email).toLowerCase().trim());
+      if (!entry) {
+        // Mensaje genérico: no revelamos si el correo existe o no.
+        return NextResponse.json({ ok: false, error: "Correo o contraseña incorrectos." }, { status: 401 });
+      }
+      const expected = entry.role === "admin" ? PASS_TRAFFICKER : PASS_GENERAL;
+      if (password !== expected) {
+        return NextResponse.json({ ok: false, error: "Correo o contraseña incorrectos." }, { status: 401 });
+      }
+      return NextResponse.json({ ok: true, role: entry.role, userName: entry.name });
+    }
 
     if (!role || !password) {
       return NextResponse.json(

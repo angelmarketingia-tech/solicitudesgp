@@ -68,6 +68,8 @@ export default function PublicPromoPage({ params }: { params: Promise<{ code: st
   const nameOk = name.trim().length > 0;
 
   const download = (p: Promo) => {
+    // Seguridad: solo esquemas seguros (evita `javascript:` u otros).
+    if (!/^https:\/\//i.test(p.fileUrl) && !/^data:(image|video|application)\//i.test(p.fileUrl)) return;
     const a = document.createElement("a");
     a.href = p.fileUrl; a.download = p.fileName || p.title; a.target = "_blank"; a.rel = "noreferrer";
     document.body.appendChild(a); a.click(); a.remove();

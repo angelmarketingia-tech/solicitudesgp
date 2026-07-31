@@ -39,26 +39,36 @@ export async function GET(req: Request) {
       return NextResponse.json({ error: "Falta parámetro 'url'." }, { status: 400 });
     }
 
-    // Solo permitimos descargas desde Firebase Storage o data URLs.
-    // Evita que el endpoint se use como proxy abierto para descargar cualquier URL.
-    const isFirebase =
-      target.startsWith("https://firebasestorage.googleapis.com/") ||
-      target.startsWith("https://storage.googleapis.com/") ||
-      target.includes(".firebasestorage.app/");
+    // Validación estricta por HOST (no por substring, que era bypasseable con
+    // p. ej. ".../#.firebasestorage.app/" apuntando a un host interno → SSRF).
+    // Parseamos la URL y validamos protocolo https + hostname exacto.
+    let parsed: URL;
+    try {
+      parsed = new URL(target);
+    } catch {
+      return NextResponse.json({ error: "URL inválida." }, { status: 400 });
+    }
+    const host = parsed.hostname.toLowerCase();
+    const allowedHost =
+      parsed.protocol === "https:" &&
+      (host === "firebasestorage.googleapis.com" ||
+        host === "storage.googleapis.com" ||
+        host.endsWith(".firebasestorage.app"));
 
-    if (!isFirebase) {
-      // Data URLs: no son necesarias aquí (el cliente puede manejarlas), pero
-      // si llegan, devolvemos error claro en vez de proxy abierto.
+    if (!allowedHost) {
+      // Bloquea proxy abierto / SSRF (metadata interna, data:, javascript:, http:, etc.).
       return NextResponse.json(
-        { error: "Solo se permiten URLs de Firebase Storage." },
+        { error: "Solo se permiten URLs https de Firebase Storage." },
         { status: 400 }
       );
     }
 
-    const upstream = await fetch(target, {
+    const upstream = await fetch(parsed.toString(), {
       // No reenviamos cookies del cliente; petición limpia.
       headers: { Accept: "*/*" },
       cache: "no-store",
+      // No seguir redirecciones: evita rebotes a hosts internos tras el chequeo.
+      redirect: "error",
     });
 
     if (!upstream.ok || !upstream.body) {

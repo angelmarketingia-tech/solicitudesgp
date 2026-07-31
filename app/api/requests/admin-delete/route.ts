@@ -28,7 +28,10 @@ import { checkRateLimit, getClientIp } from "@/lib/rate-limit";
 
 export const runtime = "nodejs";
 
-const PASS_TRAFFICKER = process.env.AUTH_PASS_TRAFFICKER || "angel2026";
+// SIN default hardcodeado: la contraseña jamás vive en el código fuente
+// (el repo es público). Si falta la variable de entorno, el endpoint falla
+// cerrado (500), igual que /api/auth.
+const PASS_TRAFFICKER = process.env.AUTH_PASS_TRAFFICKER || "";
 const PROJECT_ID = process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID || "respaldogp-a2578";
 const API_KEY = process.env.NEXT_PUBLIC_FIREBASE_API_KEY || "";
 const FS_BASE = `https://firestore.googleapis.com/v1/projects/${PROJECT_ID}/databases/(default)/documents`;
@@ -88,6 +91,14 @@ export async function POST(req: Request) {
           error: `Demasiados intentos. Espera ${Math.ceil(rl.resetInMs / 60_000)} minutos.`,
         },
         { status: 429, headers: { "Retry-After": String(Math.ceil(rl.resetInMs / 1000)) } }
+      );
+    }
+
+    if (!PASS_TRAFFICKER) {
+      console.error("[admin-delete] Falta AUTH_PASS_TRAFFICKER en el entorno.");
+      return NextResponse.json(
+        { ok: false, error: "Servidor no configurado. Contacta al administrador." },
+        { status: 500 }
       );
     }
 

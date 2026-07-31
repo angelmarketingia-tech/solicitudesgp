@@ -50,3 +50,7 @@ logo/*.pdf
 next-env.d.ts
 
 .vercel
+
+# Logs locales de túneles (no versionar)
+ngrok.log
+*.ngrok.log
