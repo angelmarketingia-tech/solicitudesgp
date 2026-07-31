@@ -129,10 +129,16 @@ type AIEvaluation = {
 };
 
 type Creative = {
+  id?: string;        // identidad única de la pieza (las piezas antiguas no la tienen)
   url: string;
-  type: string;
+  type: string;       // nombre de archivo (solo para mostrar/descargar; NO es la identidad)
   aiEvaluation?: AIEvaluation;
 };
+
+// Identidad estable de una pieza. Usa `id` si existe; para piezas antiguas
+// (sin id) cae a nombre+url. Nunca uses solo el nombre de archivo como clave:
+// dos archivos pueden llamarse igual y uno pisaría al otro.
+const creativeKey = (c: Creative) => c.id || `${c.type}::${c.url}`;
 
 type AIFeedback = {
   resumen: string;
@@ -843,6 +849,7 @@ export default function GanaPlayMainApp() {
   // Evaluación IA de una pieza, en segundo plano: NO bloquea la subida.
   const analyzeCreativeInBackground = useCallback(async (
     reqId: string,
+    creativeId: string,
     type: string,
     file: File,
     ctx: { copy: string; format: string; countries: string[] },
@@ -880,9 +887,10 @@ export default function GanaPlayMainApp() {
       const freshSnap = await getDoc(doc(db, "requests", reqId));
       if (!freshSnap.exists()) return;
       const currentCreatives: Creative[] = (freshSnap.data().creatives as Creative[]) || [];
-      if (!currentCreatives.some(c => c.type === type)) return;
+      // Apunta a la pieza EXACTA por id (dos piezas pueden tener el mismo nombre).
+      if (!currentCreatives.some(c => c.id === creativeId)) return;
       const merged = currentCreatives.map(c =>
-        c.type === type ? { ...c, aiEvaluation: resData as AIEvaluation } : c);
+        c.id === creativeId ? { ...c, aiEvaluation: resData as AIEvaluation } : c);
       await updateDoc(doc(db, "requests", reqId), { creatives: merged });
       setSelectedReq(prev => (prev && prev.id === reqId) ? { ...prev, creatives: merged } : prev);
     } catch {
@@ -924,7 +932,9 @@ export default function GanaPlayMainApp() {
 
     // ── Intento 1: Firebase Storage con timeout corto ────────────────
     try {
-      const storageRef = ref(storage, `creatives/${reqSnapshot.id}/${Date.now()}_${safeName}`);
+      // Ruta única (fecha + aleatorio): evita que dos archivos con el MISMO
+      // nombre se sobrescriban entre sí en Storage.
+      const storageRef = ref(storage, `creatives/${reqSnapshot.id}/${Date.now()}_${Math.random().toString(36).slice(2, 7)}_${safeName}`);
       const snapshot = await Promise.race([
         uploadBytes(storageRef, file),
         new Promise<never>((_, reject) => setTimeout(
@@ -976,15 +986,24 @@ export default function GanaPlayMainApp() {
     // evaluación IA en background u otra subida ya escribieron). Así, al subir
     // 3 archivos, ninguno pisa al anterior: TODOS quedan guardados de una vez.
     try {
-      const newCreative: Creative = { url: downloadURL, type };
+      // Identidad ÚNICA por pieza: así N archivos subidos = N piezas guardadas,
+      // aunque varios se llamen igual (antes, un nombre repetido pisaba al otro).
+      const newCreative: Creative = { id: `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`, url: downloadURL, type };
 
       const freshSnap = await getDoc(doc(db, "requests", reqSnapshot.id));
       const freshData = freshSnap.exists() ? freshSnap.data() : null;
-      const baseCreatives: Creative[] = (freshData?.creatives as Creative[]) || reqSnapshot.creatives || [];
+      const remoteCreatives: Creative[] = (freshData?.creatives as Creative[]) || [];
+      const memCreatives: Creative[] = reqSnapshot.creatives || [];
       const baseHistory: HistoryEntry[] = (freshData?.history as HistoryEntry[]) || reqSnapshot.history || [];
 
-      // Reemplaza la pieza del mismo `type` si existía; conserva el resto.
-      const newCreativesList = [...baseCreatives.filter(c => c.type !== type), newCreative];
+      // Unión de la lista del servidor con la acumulada en memoria (identidad
+      // por `creativeKey`). Si `getDoc` viniera desactualizado, esta unión evita
+      // perder piezas ya subidas en esta misma tanda. Luego SIEMPRE se añade la
+      // nueva pieza (id único), nunca se reemplaza por nombre.
+      const mergedBase = new Map<string, Creative>();
+      for (const c of remoteCreatives) mergedBase.set(creativeKey(c), c);
+      for (const c of memCreatives) if (!mergedBase.has(creativeKey(c))) mergedBase.set(creativeKey(c), c);
+      const newCreativesList = [...mergedBase.values(), newCreative];
       const entry: HistoryEntry = {
         action: usedFallback
           ? `Entregable subido a Firestore (Storage caído): ${safeName}`
@@ -1021,7 +1040,7 @@ export default function GanaPlayMainApp() {
         });
       }
       if (isImage) {
-        void analyzeCreativeInBackground(reqSnapshot.id, type, file,
+        void analyzeCreativeInBackground(reqSnapshot.id, newCreative.id!, type, file,
           { copy: reqSnapshot.copy, format: reqSnapshot.format, countries: reqSnapshot.countries });
       }
       return updatedReq;
@@ -1296,9 +1315,10 @@ export default function GanaPlayMainApp() {
     return m ? m[1].toLowerCase() : 'jpg';
   };
 
-  const handleDeleteCreative = async (reqId: string, dimType: string) => {
+  const handleDeleteCreative = async (reqId: string, target: Creative) => {
     if (!selectedReq) return;
-    const newCreatives = selectedReq.creatives.filter(c => c.type !== dimType);
+    const targetKey = creativeKey(target);
+    const newCreatives = selectedReq.creatives.filter(c => creativeKey(c) !== targetKey);
     try {
       await updateDoc(doc(db, "requests", reqId), { creatives: newCreatives, updatedAt: serverTimestamp() });
       setSelectedReq({ ...selectedReq, creatives: newCreatives });
@@ -1779,12 +1799,11 @@ export default function GanaPlayMainApp() {
           </div>
         </div>
         <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexShrink: 0 }}>
-          {role !== 'designer' && (
-            <button title="Nueva solicitud" className="btn" style={{ padding: '9px 14px', fontSize: '13px' }}
-              onClick={() => setCreateModalOpen(true)}>
-              <Plus size={16} /> Nueva
-            </button>
-          )}
+          {/* Todos los perfiles (incluidos diseñadores) pueden crear solicitudes. */}
+          <button title="Nueva solicitud" className="btn" style={{ padding: '9px 14px', fontSize: '13px' }}
+            onClick={() => setCreateModalOpen(true)}>
+            <Plus size={16} /> Nueva
+          </button>
           <button title="Notificaciones" className="btn-ghost"
             style={{ padding: '9px 12px', fontSize: '13px', position: 'relative', borderRadius: '10px', cursor: 'pointer' }}
             onClick={() => { setNotifPanelOpen(p => !p); if (!notifPanelOpen) markAllRead(); }}>
@@ -3141,7 +3160,7 @@ export default function GanaPlayMainApp() {
                             </button>
                             {role === 'designer' && (
                               <button className="btn-danger" style={{ padding: '7px 12px', fontSize: '12px', borderRadius: '9px', cursor: 'pointer' }}
-                                onClick={() => handleDeleteCreative(selectedReq.id, creative.type)}>
+                                onClick={() => handleDeleteCreative(selectedReq.id, creative)}>
                                 <Trash2 size={14} />
                               </button>
                             )}
