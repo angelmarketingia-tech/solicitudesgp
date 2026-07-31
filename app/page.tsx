@@ -7,7 +7,7 @@ import {
   ChevronRight, CalendarDays, Maximize2, X,
   CheckCircle2, Clock,
   LogOut, AlertCircle, UploadCloud, Bot, Send, Trash2,
-  Download, Bell, Sparkles, Target, Building2, ClipboardList, AtSign
+  Download, Bell, Sparkles, Target, Building2, ClipboardList, AtSign, Users
 } from 'lucide-react';
 
 // ─── Firebase ───
@@ -20,6 +20,7 @@ import { ref, uploadBytes, getDownloadURL, deleteObject, listAll } from 'firebas
 import { emailForUser, DEFAULT_TRAFFICKER_EMAIL } from '@/lib/users';
 import { compressImageToDataUrl, validateImage } from '@/lib/image';
 import SocialMediaTab from './SocialMediaTab';
+import InfluencerModule from './InfluencerModule';
 
 // ─── Configuración visual de estados y prioridades (tema claro GanaPlay) ───
 const STATUS_COLORS: Record<string, string> = {
@@ -371,7 +372,12 @@ export default function GanaPlayMainApp() {
     // de operación normal del equipo. Cuando se supere, migrar a paginación real.
     const qReq = query(collection(db, "requests"), orderBy("deliveryDate", "desc"), limit(1000));
     const unsubReq = onSnapshot(qReq, (snap) => {
-      const data = snap.docs.map(docSnap => ({ id: docSnap.id, ...docSnap.data() } as RequestType));
+      // Excluye los documentos del módulo de influencers (llevan `board`): viven
+      // en `requests` pero NO son solicitudes de diseño y no deben aparecer ni
+      // contarse en ninguna vista del tablero.
+      const data = snap.docs
+        .map(docSnap => ({ id: docSnap.id, ...docSnap.data() } as RequestType & { board?: string }))
+        .filter(r => !r.board);
       setRequests(data);
       setLoadingData(false);
       try { localStorage.setItem('gp_requests_backup', JSON.stringify(data)); } catch {}
@@ -1849,6 +1855,9 @@ export default function GanaPlayMainApp() {
           <div style={navItemStyle(activeTab === 'Historial')} onClick={() => setActiveTab('Historial')}><Clock size={15} /> Historial</div>
           <div style={navItemStyle(activeTab === 'Tabla Principal')} onClick={() => setActiveTab('Tabla Principal')}><List size={15} /> Tabla</div>
           <div style={navItemStyle(activeTab === 'Redes Sociales')} onClick={() => setActiveTab('Redes Sociales')}><CalendarDays size={15} /> Redes Sociales</div>
+          {(role === 'admin' || role === 'cm') && (
+            <div style={navItemStyle(activeTab === 'Contenido Influencers')} onClick={() => setActiveTab('Contenido Influencers')}><Users size={15} /> Contenido Influencers</div>
+          )}
         </div>
 
         {/* ESTADO DE CARGA */}
@@ -2383,6 +2392,10 @@ export default function GanaPlayMainApp() {
         {/* ─── VISTA: REDES SOCIALES (calendario + carpetas + videos) ─── */}
         {activeTab === 'Redes Sociales' && (
           <SocialMediaTab role={role} userName={userName} addToast={addToast} />
+        )}
+
+        {activeTab === 'Contenido Influencers' && (role === 'admin' || role === 'cm') && (
+          <InfluencerModule role={role} userName={userName} addToast={addToast} />
         )}
       </div>
 
