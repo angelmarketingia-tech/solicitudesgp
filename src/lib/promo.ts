@@ -205,6 +205,29 @@ export async function deletePromoDoc(db: Firestore, id: string) {
   await deleteDoc(doc(db, "requests", id));
 }
 
+// Mueve un item (carpeta o archivo) a otra carpeta.
+export async function movePromoItem(db: Firestore, id: string, newParentId: string) {
+  await updateDoc(doc(db, "requests", id), {
+    parentId: newParentId || PROMO_ROOT, status: "Pendiente", updatedAt: serverTimestamp(),
+  });
+}
+
+// Lista ordenada de carpetas (con profundidad) para elegir destino al mover.
+// `excludeIds` evita mover una carpeta dentro de sí misma o de su descendencia.
+export function folderChoices(items: PromoItem[], excludeIds: Set<string>): { folder: PromoItem; depth: number }[] {
+  const out: { folder: PromoItem; depth: number }[] = [];
+  const walk = (parentId: string, depth: number) => {
+    if (depth > 50) return;
+    sortItems(items.filter(i => i.parentId === parentId && i.kind === "folder")).forEach(f => {
+      if (excludeIds.has(f.id)) return;
+      out.push({ folder: f, depth });
+      walk(f.id, depth + 1);
+    });
+  };
+  walk(PROMO_ROOT, 0);
+  return out;
+}
+
 // ─── Comentarios (arrayUnion; escribibles desde la página pública) ───────────
 export function buildComment(authorName: string, text: string, source: "app" | "public"): PromoComment {
   return { id: newCommentId(), authorName: authorName.trim() || "Anónimo", text: text.trim(), createdAt: new Date().toISOString(), source };

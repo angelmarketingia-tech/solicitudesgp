@@ -16,7 +16,7 @@ import React, { useState, useEffect, useMemo, ChangeEvent } from "react";
 import {
   Megaphone, UploadCloud, Download, Trash2, Pencil, X, MessageSquare, Send,
   Copy, ExternalLink, FileText, Image as ImageIcon, RefreshCw, Loader2, FileArchive,
-  Folder, FolderPlus, ChevronRight, Home,
+  Folder, FolderPlus, ChevronRight, Home, FolderInput,
 } from "lucide-react";
 import { db, storage } from "@/lib/firebase";
 import { collection, onSnapshot, query, where } from "firebase/firestore";
@@ -26,7 +26,7 @@ import {
   PromoItem, PromoComment, PromoConfig, PROMO_ROOT,
   itemFromDoc, configFromDoc, fileTypeOf, getOrCreateConfig, sortItems, breadcrumb, descendantIds,
   createFolder, createFile, renamePromoItem, replacePromoFile, deletePromoDoc,
-  addPromoComment, addGeneralComment, buildComment,
+  addPromoComment, addGeneralComment, buildComment, movePromoItem, folderChoices,
 } from "@/lib/promo";
 
 type Toast = (msg: string, type?: "success" | "error" | "info") => void;
@@ -48,6 +48,7 @@ export default function PromoModule({ role, userName, addToast }: Props) {
   const [newFolderName, setNewFolderName] = useState("");
   const [renaming, setRenaming] = useState<PromoItem | null>(null);
   const [renameVal, setRenameVal] = useState("");
+  const [moving, setMoving] = useState<PromoItem | null>(null);
 
   const [generalInput, setGeneralInput] = useState("");
   const [commentInputs, setCommentInputs] = useState<Record<string, string>>({});
@@ -178,6 +179,19 @@ export default function PromoModule({ role, userName, addToast }: Props) {
     catch { addToast("No se pudo renombrar.", "error"); }
   };
 
+  const doMove = async (destId: string) => {
+    if (!moving) return;
+    if (destId === moving.parentId) { setMoving(null); return; }
+    try { await movePromoItem(db, moving.id, destId); setMoving(null); addToast("Movido correctamente.", "success"); }
+    catch { addToast("No se pudo mover.", "error"); }
+  };
+  // Destinos válidos: todas las carpetas menos la propia y su descendencia.
+  const moveExclude = useMemo(() => {
+    if (!moving) return new Set<string>();
+    return new Set<string>(moving.kind === "folder" ? [moving.id, ...descendantIds(items, moving.id)] : []);
+  }, [moving, items]);
+  const moveTargets = useMemo(() => (moving ? folderChoices(items, moveExclude) : []), [moving, items, moveExclude]);
+
   const download = (item: PromoItem) => {
     if (!item.fileUrl) return;
     if (!/^https:\/\//i.test(item.fileUrl) && !/^data:(image|video|application)\//i.test(item.fileUrl)) {
@@ -283,6 +297,7 @@ export default function PromoModule({ role, userName, addToast }: Props) {
                   </div>
                   {canManage && (
                     <div style={{ display: "flex", gap: "4px", flexShrink: 0 }} onClick={e => e.stopPropagation()}>
+                      <button className="btn-secondary" title="Mover" style={{ padding: "6px", borderRadius: "8px", cursor: "pointer" }} onClick={() => setMoving(f)}><FolderInput size={13} /></button>
                       <button className="btn-secondary" title="Renombrar" style={{ padding: "6px", borderRadius: "8px", cursor: "pointer" }} onClick={() => { setRenaming(f); setRenameVal(f.name); }}><Pencil size={13} /></button>
                       <button className="btn-danger" title="Eliminar" style={{ padding: "6px", borderRadius: "8px", cursor: "pointer" }} onClick={() => handleDelete(f)}><Trash2 size={13} /></button>
                     </div>
@@ -311,6 +326,7 @@ export default function PromoModule({ role, userName, addToast }: Props) {
                       </button>
                       {canManage && (
                         <>
+                          <button className="btn-secondary" title="Mover" style={{ padding: "7px 10px", fontSize: "12px", borderRadius: "9px", cursor: "pointer" }} onClick={() => setMoving(p)}><FolderInput size={13} /></button>
                           <button className="btn-secondary" title="Renombrar" style={{ padding: "7px 10px", fontSize: "12px", borderRadius: "9px", cursor: "pointer" }} onClick={() => { setRenaming(p); setRenameVal(p.name); }}><Pencil size={13} /></button>
                           <label className="btn-secondary" title="Reemplazar archivo" style={{ padding: "7px 10px", fontSize: "12px", borderRadius: "9px", cursor: "pointer", display: "inline-flex", alignItems: "center" }}>
                             <RefreshCw size={13} />
@@ -363,6 +379,35 @@ export default function PromoModule({ role, userName, addToast }: Props) {
             </div>
             <input autoFocus value={renameVal} onChange={e => setRenameVal(e.target.value)} onKeyDown={e => e.key === "Enter" && saveRename()} style={{ marginBottom: "16px" }} />
             <button className="btn" style={{ width: "100%", padding: "12px" }} onClick={saveRename}>Guardar</button>
+          </div>
+        </div>
+      )}
+
+      {/* Modal mover */}
+      {moving && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 200, padding: "16px" }} onClick={() => setMoving(null)}>
+          <div className="card" style={{ width: "480px", maxWidth: "100%", maxHeight: "80vh", display: "flex", flexDirection: "column", padding: "24px" }} onClick={e => e.stopPropagation()}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "6px" }}>
+              <h2 style={{ fontSize: "18px", margin: 0, color: "var(--text-primary)" }}>Mover «{moving.name}»</h2>
+              <X size={22} style={{ cursor: "pointer", color: "var(--text-secondary)" }} onClick={() => setMoving(null)} />
+            </div>
+            <p style={{ fontSize: "12px", color: "var(--text-muted)", margin: "0 0 14px" }}>Elige la carpeta destino:</p>
+            <div style={{ overflowY: "auto", display: "flex", flexDirection: "column", gap: "4px" }}>
+              <button className="btn-secondary" style={{ textAlign: "left", padding: "9px 12px", fontSize: "13px", borderRadius: "9px", cursor: "pointer", display: "flex", alignItems: "center", gap: "8px", opacity: moving.parentId === PROMO_ROOT ? 0.5 : 1 }}
+                disabled={moving.parentId === PROMO_ROOT} onClick={() => doMove(PROMO_ROOT)}>
+                <Home size={14} /> Raíz (Promocionales){moving.parentId === PROMO_ROOT ? " · aquí está" : ""}
+              </button>
+              {moveTargets.map(({ folder, depth }) => (
+                <button key={folder.id} className="btn-secondary"
+                  style={{ textAlign: "left", padding: "9px 12px", paddingLeft: `${12 + depth * 18}px`, fontSize: "13px", borderRadius: "9px", cursor: "pointer", display: "flex", alignItems: "center", gap: "8px", opacity: moving.parentId === folder.id ? 0.5 : 1 }}
+                  disabled={moving.parentId === folder.id} onClick={() => doMove(folder.id)}>
+                  <Folder size={14} color="var(--accent-color)" /> {folder.name}{moving.parentId === folder.id ? " · aquí está" : ""}
+                </button>
+              ))}
+              {moveTargets.length === 0 && (
+                <p style={{ fontSize: "12px", color: "var(--text-muted)", textAlign: "center", padding: "12px" }}>No hay otras carpetas. Muévelo a la raíz o crea carpetas primero.</p>
+              )}
+            </div>
           </div>
         </div>
       )}
