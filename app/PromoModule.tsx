@@ -16,7 +16,7 @@ import React, { useState, useEffect, useMemo, ChangeEvent } from "react";
 import {
   Megaphone, UploadCloud, Download, Trash2, Pencil, X, MessageSquare, Send,
   Copy, ExternalLink, FileText, Image as ImageIcon, RefreshCw, Loader2, FileArchive,
-  Folder, FolderPlus, ChevronRight, Home, FolderInput,
+  Folder, FolderPlus, ChevronRight, Home, FolderInput, Link2,
 } from "lucide-react";
 import { db, storage } from "@/lib/firebase";
 import { collection, onSnapshot, query, where } from "firebase/firestore";
@@ -27,6 +27,7 @@ import {
   itemFromDoc, configFromDoc, fileTypeOf, getOrCreateConfig, sortItems, breadcrumb, descendantIds,
   createFolder, createFile, renamePromoItem, replacePromoFile, deletePromoDoc,
   addPromoComment, addGeneralComment, buildComment, movePromoItem, folderChoices,
+  ensureFolderShareCode,
 } from "@/lib/promo";
 
 type Toast = (msg: string, type?: "success" | "error" | "info") => void;
@@ -86,6 +87,15 @@ export default function PromoModule({ role, userName, addToast }: Props) {
     if (!publicUrl) return;
     try { await navigator.clipboard.writeText(publicUrl); addToast("Link copiado. Compártelo con la empresa externa.", "success"); }
     catch { addToast(publicUrl, "info"); }
+  };
+  // Link único de UNA carpeta: muestra solo esa carpeta y sus subcarpetas.
+  const copyFolderLink = async (folder: PromoItem) => {
+    try {
+      const code = await ensureFolderShareCode(db, folder);
+      const url = `${typeof window !== "undefined" ? window.location.origin : ""}/p/${code}`;
+      try { await navigator.clipboard.writeText(url); addToast(`Link de "${folder.name}" copiado.`, "success"); }
+      catch { addToast(url, "info"); }
+    } catch { addToast("No se pudo generar el link de la carpeta.", "error"); }
   };
 
   // ── Subida ──
@@ -297,13 +307,16 @@ export default function PromoModule({ role, userName, addToast }: Props) {
                     <div style={{ fontSize: "14px", fontWeight: 700, color: "var(--text-primary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{f.name}</div>
                     <div style={{ fontSize: "11px", color: "var(--text-muted)" }}>{items.filter(i => i.parentId === f.id).length} elemento(s)</div>
                   </div>
-                  {canManage && (
-                    <div style={{ display: "flex", gap: "4px", flexShrink: 0 }} onClick={e => e.stopPropagation()}>
-                      <button className="btn-secondary" title="Mover" style={{ padding: "6px", borderRadius: "8px", cursor: "pointer" }} onClick={() => setMoving(f)}><FolderInput size={13} /></button>
-                      <button className="btn-secondary" title="Renombrar" style={{ padding: "6px", borderRadius: "8px", cursor: "pointer" }} onClick={() => { setRenaming(f); setRenameVal(f.name); }}><Pencil size={13} /></button>
-                      <button className="btn-danger" title="Eliminar" style={{ padding: "6px", borderRadius: "8px", cursor: "pointer" }} onClick={() => handleDelete(f)}><Trash2 size={13} /></button>
-                    </div>
-                  )}
+                  <div style={{ display: "flex", gap: "4px", flexShrink: 0 }} onClick={e => e.stopPropagation()}>
+                    <button className="btn-secondary" title="Copiar link solo de esta carpeta" style={{ padding: "6px", borderRadius: "8px", cursor: "pointer" }} onClick={() => copyFolderLink(f)}><Link2 size={13} /></button>
+                    {canManage && (
+                      <>
+                        <button className="btn-secondary" title="Mover" style={{ padding: "6px", borderRadius: "8px", cursor: "pointer" }} onClick={() => setMoving(f)}><FolderInput size={13} /></button>
+                        <button className="btn-secondary" title="Renombrar" style={{ padding: "6px", borderRadius: "8px", cursor: "pointer" }} onClick={() => { setRenaming(f); setRenameVal(f.name); }}><Pencil size={13} /></button>
+                        <button className="btn-danger" title="Eliminar" style={{ padding: "6px", borderRadius: "8px", cursor: "pointer" }} onClick={() => handleDelete(f)}><Trash2 size={13} /></button>
+                      </>
+                    )}
+                  </div>
                 </div>
               ))}
             </div>

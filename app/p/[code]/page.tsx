@@ -4,8 +4,11 @@
  * ─── Vista pública de Promocionales (empresa externa, sin credenciales) ─────
  *
  * URL permanente: /p/<shareCode>
- * Navega las carpetas (como Drive), descarga archivos y comenta (general y por
- * pieza). NO puede editar, subir ni borrar.
+ * El código puede ser:
+ *   - el GLOBAL (config)  → muestra toda la raíz de Promocionales.
+ *   - el de UNA CARPETA   → muestra SOLO esa carpeta y sus subcarpetas
+ *     (así se puede compartir "2026" sin exponer "CRM", por ejemplo).
+ * Navega carpetas, descarga archivos y comenta. NO edita/sube/borra.
  */
 
 import React, { use, useEffect, useMemo, useState } from "react";
@@ -16,16 +19,18 @@ import {
 import { db } from "@/lib/firebase";
 import { collection, onSnapshot, query, where } from "firebase/firestore";
 import {
-  PromoItem, PromoComment, PromoConfig, PROMO_ROOT,
+  PromoItem, PromoComment, PROMO_ROOT,
   itemFromDoc, configFromDoc, addGeneralComment, addPromoComment, buildComment,
-  sortItems, breadcrumb,
+  sortItems, breadcrumb, subtreeIds,
 } from "@/lib/promo";
+
+type Scope = { rootId: string; name?: string; isRoot: boolean; general: PromoComment[]; configId?: string };
 
 export default function PublicPromoPage({ params }: { params: Promise<{ code: string }> }) {
   const { code } = use(params);
 
   const [loading, setLoading] = useState(true);
-  const [config, setConfig] = useState<PromoConfig | null>(null);
+  const [scope, setScope] = useState<Scope | "invalid" | null>(null);
   const [items, setItems] = useState<PromoItem[]>([]);
   const [currentId, setCurrentId] = useState<string>(PROMO_ROOT);
   const [name, setName] = useState("");
@@ -36,33 +41,66 @@ export default function PublicPromoPage({ params }: { params: Promise<{ code: st
   useEffect(() => { try { const n = localStorage.getItem("promo_public_name"); if (n) setName(n); } catch { /* */ } }, []);
   useEffect(() => { try { if (name) localStorage.setItem("promo_public_name", name); } catch { /* */ } }, [name]);
 
+  // 1) Resolver el código: puede ser el global (config) o el de una carpeta.
   useEffect(() => {
     if (!code) return;
     const qy = query(collection(db, "requests"), where("shareCode", "==", code));
     const unsub = onSnapshot(qy, (snap) => {
-      const found = snap.docs.find(d => d.data().board === "promo_config");
-      setConfig(found ? configFromDoc(found.id, found.data()) : null);
+      const docSnap = snap.docs.find(d => {
+        const b = d.data().board;
+        return b === "promo_config" || (b === "promo" && d.data().kind === "folder");
+      });
+      if (!docSnap) { setScope("invalid"); setLoading(false); return; }
+      const data = docSnap.data();
+      if (data.board === "promo_config") {
+        const cfg = configFromDoc(docSnap.id, data);
+        setScope({ rootId: PROMO_ROOT, isRoot: true, general: cfg.generalMessages, configId: cfg.id });
+      } else {
+        const f = itemFromDoc(docSnap.id, data);
+        setScope({ rootId: f.id, name: f.name, isRoot: false, general: f.messages });
+      }
       setLoading(false);
-    }, () => setLoading(false));
+    }, () => { setScope("invalid"); setLoading(false); });
     return () => unsub();
   }, [code]);
 
+  const rootId = scope && scope !== "invalid" ? scope.rootId : null;
+
+  // Al resolver, sitúa la navegación en la raíz compartida.
+  useEffect(() => { if (rootId) setCurrentId(rootId); }, [rootId]);
+
+  // 2) Cargar todos los items de Promocionales (se acota abajo por subárbol).
   useEffect(() => {
-    if (!config) { setItems([]); return; }
+    if (!rootId) { setItems([]); return; }
     const qy = query(collection(db, "requests"), where("board", "==", "promo"));
     const unsub = onSnapshot(qy, (snap) => setItems(snap.docs.map(d => itemFromDoc(d.id, d.data()))), () => { /* */ });
     return () => unsub();
-  }, [config]);
+  }, [rootId]);
+
+  // Acota a la carpeta compartida (y su descendencia) si NO es el link global.
+  const visibleItems = useMemo(() => {
+    if (!rootId || rootId === PROMO_ROOT) return items;
+    const set = subtreeIds(items, rootId);
+    return items.filter(i => set.has(i.id));
+  }, [items, rootId]);
 
   useEffect(() => {
-    if (currentId !== PROMO_ROOT && !items.some(i => i.id === currentId)) setCurrentId(PROMO_ROOT);
-  }, [items, currentId]);
+    if (currentId !== PROMO_ROOT && !items.some(i => i.id === currentId)) setCurrentId(rootId || PROMO_ROOT);
+  }, [items, currentId, rootId]);
 
-  const crumbs = useMemo(() => breadcrumb(items, currentId), [items, currentId]);
-  const children = useMemo(() => sortItems(items.filter(i => i.parentId === currentId)), [items, currentId]);
+  // Breadcrumb acotado: desde la carpeta compartida hacia abajo.
+  const crumbs = useMemo(() => {
+    const full = breadcrumb(items, currentId);
+    if (!rootId || rootId === PROMO_ROOT) return full;
+    const idx = full.findIndex(c => c.id === rootId);
+    return idx >= 0 ? full.slice(idx + 1) : full;
+  }, [items, currentId, rootId]);
+
+  const children = useMemo(() => sortItems(visibleItems.filter(i => i.parentId === currentId)), [visibleItems, currentId]);
   const folders = children.filter(i => i.kind === "folder");
   const files = children.filter(i => i.kind === "file");
   const nameOk = name.trim().length > 0;
+  const isRootScope = scope && scope !== "invalid" ? scope.isRoot : false;
 
   const download = (item: PromoItem) => {
     if (!item.fileUrl) return;
@@ -71,10 +109,15 @@ export default function PublicPromoPage({ params }: { params: Promise<{ code: st
     a.href = item.fileUrl; a.download = item.fileName || item.name; a.target = "_blank"; a.rel = "noreferrer";
     document.body.appendChild(a); a.click(); a.remove();
   };
+  // Comentario "general": en el link global va al config; en un link de carpeta,
+  // va al doc de esa carpeta (así el diseñador lo ve como comentario de la pieza/carpeta).
   const sendGeneral = async () => {
-    if (!generalInput.trim() || !config || !nameOk) return;
+    if (!generalInput.trim() || !nameOk || !scope || scope === "invalid") return;
     const text = generalInput.trim(); setGeneralInput("");
-    try { await addGeneralComment(db, config.id, buildComment(name, text, "public")); } catch { setGeneralInput(text); }
+    try {
+      if (scope.isRoot && scope.configId) await addGeneralComment(db, scope.configId, buildComment(name, text, "public"));
+      else await addPromoComment(db, scope.rootId, buildComment(name, text, "public"));
+    } catch { setGeneralInput(text); }
   };
   const sendComment = async (id: string) => {
     const text = (commentInputs[id] || "").trim();
@@ -91,7 +134,7 @@ export default function PublicPromoPage({ params }: { params: Promise<{ code: st
       </div>
     );
   }
-  if (!config) {
+  if (scope === "invalid" || !scope) {
     return (
       <div style={{ maxWidth: "560px", margin: "0 auto", padding: "80px 16px", textAlign: "center" }}>
         <Lock size={44} style={{ opacity: 0.4, marginBottom: "12px" }} />
@@ -106,7 +149,7 @@ export default function PublicPromoPage({ params }: { params: Promise<{ code: st
       <div style={{ display: "flex", alignItems: "center", gap: "12px", marginBottom: "4px" }}>
         <img src="/logo.png" alt="GanaPlay" style={{ height: "38px" }} onError={(e) => ((e.target as HTMLImageElement).style.display = "none")} />
         <div style={{ fontSize: "20px", fontWeight: 800, color: "var(--text-primary)", display: "flex", alignItems: "center", gap: "8px" }}>
-          <Megaphone size={20} color="var(--accent-color)" /> Promocionales
+          <Megaphone size={20} color="var(--accent-color)" /> Promocionales{!isRootScope && scope.name ? ` — ${scope.name}` : ""}
         </div>
       </div>
       <p style={{ fontSize: "12px", color: "var(--text-muted)", marginBottom: "18px", display: "flex", alignItems: "center", gap: "6px" }}>
@@ -122,8 +165,8 @@ export default function PublicPromoPage({ params }: { params: Promise<{ code: st
 
       {/* Breadcrumb */}
       <div className="card" style={{ padding: "10px 14px", marginBottom: "12px", display: "flex", alignItems: "center", gap: "4px", flexWrap: "wrap", fontSize: "13px" }}>
-        <span onClick={() => setCurrentId(PROMO_ROOT)} style={{ cursor: "pointer", display: "inline-flex", alignItems: "center", gap: "4px", color: currentId === PROMO_ROOT ? "var(--text-primary)" : "var(--accent-color)", fontWeight: 700 }}>
-          <Home size={14} /> Inicio
+        <span onClick={() => setCurrentId(rootId || PROMO_ROOT)} style={{ cursor: "pointer", display: "inline-flex", alignItems: "center", gap: "4px", color: currentId === rootId ? "var(--text-primary)" : "var(--accent-color)", fontWeight: 700 }}>
+          <Home size={14} /> {isRootScope ? "Inicio" : (scope.name || "Inicio")}
         </span>
         {crumbs.map(c => (
           <span key={c.id} style={{ display: "inline-flex", alignItems: "center", gap: "4px" }}>
@@ -133,18 +176,20 @@ export default function PublicPromoPage({ params }: { params: Promise<{ code: st
         ))}
       </div>
 
-      {/* Comentarios generales */}
-      <div className="card" style={{ padding: "16px", marginBottom: "16px" }}>
-        <h4 style={{ margin: "0 0 10px", fontSize: "14px", color: "var(--text-primary)", display: "flex", alignItems: "center", gap: "8px" }}>
-          <MessageSquare size={15} color="var(--accent-color)" /> Comentarios generales
-        </h4>
-        <PubCommentList messages={config.generalMessages} emptyText="Sin comentarios generales aún." />
-        <div style={{ display: "flex", gap: "8px", marginTop: "10px" }}>
-          <input value={generalInput} onChange={e => setGeneralInput(e.target.value)} onKeyDown={e => e.key === "Enter" && sendGeneral()}
-            placeholder="Escribe un comentario general…" style={{ fontSize: "13px", flex: 1 }} disabled={!nameOk} />
-          <button className="btn" style={{ padding: "10px" }} onClick={sendGeneral} disabled={!nameOk}><Send size={16} /></button>
+      {/* Comentarios generales (solo en el link global; en carpeta se usa por pieza) */}
+      {isRootScope && (
+        <div className="card" style={{ padding: "16px", marginBottom: "16px" }}>
+          <h4 style={{ margin: "0 0 10px", fontSize: "14px", color: "var(--text-primary)", display: "flex", alignItems: "center", gap: "8px" }}>
+            <MessageSquare size={15} color="var(--accent-color)" /> Comentarios generales
+          </h4>
+          <PubCommentList messages={scope.general} emptyText="Sin comentarios generales aún." />
+          <div style={{ display: "flex", gap: "8px", marginTop: "10px" }}>
+            <input value={generalInput} onChange={e => setGeneralInput(e.target.value)} onKeyDown={e => e.key === "Enter" && sendGeneral()}
+              placeholder="Escribe un comentario general…" style={{ fontSize: "13px", flex: 1 }} disabled={!nameOk} />
+            <button className="btn" style={{ padding: "10px" }} onClick={sendGeneral} disabled={!nameOk}><Send size={16} /></button>
+          </div>
         </div>
-      </div>
+      )}
 
       {/* Contenido */}
       {children.length === 0 ? (

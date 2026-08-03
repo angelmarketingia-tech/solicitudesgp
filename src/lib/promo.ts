@@ -32,6 +32,7 @@ export type PromoItem = {
   kind: "folder" | "file";
   name: string;               // nombre visible (carpeta o archivo)
   parentId: string;           // PROMO_ROOT o id de la carpeta padre
+  shareCode?: string;         // solo carpetas: código de su link público propio
   // Solo archivos:
   fileUrl?: string;
   fileName?: string;
@@ -74,6 +75,7 @@ export function itemFromDoc(id: string, data: Record<string, unknown>): PromoIte
     kind,
     name: String(data.name || data.title || (kind === "folder" ? "Carpeta" : "Archivo")),
     parentId: String(data.parentId || PROMO_ROOT),
+    shareCode: data.shareCode ? String(data.shareCode) : undefined,
     fileUrl: data.fileUrl ? String(data.fileUrl) : undefined,
     fileName: data.fileName ? String(data.fileName) : undefined,
     fileType: data.fileType ? (String(data.fileType) as PromoItem["fileType"]) : undefined,
@@ -203,6 +205,21 @@ export async function replacePromoFile(
 
 export async function deletePromoDoc(db: Firestore, id: string) {
   await deleteDoc(doc(db, "requests", id));
+}
+
+// Asegura que una carpeta tenga su propio código de link público. Si ya lo
+// tiene, lo devuelve; si no, genera uno y lo guarda. Así cada carpeta puede
+// compartirse por separado (/p/<código>) sin exponer las demás.
+export async function ensureFolderShareCode(db: Firestore, folder: PromoItem): Promise<string> {
+  if (folder.shareCode) return folder.shareCode;
+  const code = genCode();
+  await updateDoc(doc(db, "requests", folder.id), { shareCode: code, status: "Pendiente", updatedAt: serverTimestamp() });
+  return code;
+}
+
+// Ids de una carpeta MÁS toda su descendencia (para acotar la vista pública).
+export function subtreeIds(items: PromoItem[], rootId: string): Set<string> {
+  return new Set<string>([rootId, ...descendantIds(items, rootId)]);
 }
 
 // Mueve un item (carpeta o archivo) a otra carpeta.
