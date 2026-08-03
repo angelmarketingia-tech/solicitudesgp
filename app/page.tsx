@@ -7,7 +7,7 @@ import {
   ChevronRight, CalendarDays, Maximize2, X,
   CheckCircle2, Clock,
   LogOut, AlertCircle, UploadCloud, Bot, Send, Trash2,
-  Download, Bell, Sparkles, Target, Building2, ClipboardList, AtSign, Users, Megaphone
+  Download, Bell, Sparkles, Target, Building2, ClipboardList, AtSign, Users, Megaphone, Pencil
 } from 'lucide-react';
 
 // ─── Firebase ───
@@ -327,6 +327,8 @@ export default function GanaPlayMainApp() {
   const [countries, setCountries] = useState<string[]>([]);
   const [referenceImgs, setReferenceImgs] = useState<string[]>([]);
   const [referenceFiles, setReferenceFiles] = useState<ReferenceFile[]>([]);
+  const [customDim, setCustomDim] = useState("");            // dimensión "Otro" en texto
+  const [editingReqId, setEditingReqId] = useState<string | null>(null); // id si estamos editando
   const [priority, setPriority] = useState<RequestPriority>("Medio");
   const [area, setArea] = useState(AREAS[0]);
   const [requesterName, setRequesterName] = useState("");
@@ -609,7 +611,53 @@ export default function GanaPlayMainApp() {
   const removeRequesterEmail = (email: string) =>
     setRequesterEmails(prev => prev.filter(e => e !== email));
 
-  // ─── Crear solicitud ───
+  // ─── Dimensiones "Otro" (texto libre) ───
+  const addCustomDimension = (raw: string) => {
+    const d = raw.trim();
+    if (!d) return;
+    setDimensions(prev => prev.includes(d) ? prev : [...prev, d]);
+    setCustomDim("");
+  };
+  // Dimensiones que NO están en la lista predefinida (las escritas a mano).
+  const customDimensions = dimensions.filter(d => !DIMENSION_OPTIONS.some(o => o.key === d));
+
+  // ─── Reset / abrir formulario ───
+  const resetCreateForm = () => {
+    setTitleStr(""); setCopyStr(""); setDimensions([]); setCustomDim(""); setCountries([]); setChannels([]);
+    setReferenceImgs([]); setReferenceFiles([]); setPriority("Medio"); setFormat("static"); setRequestKind("Nueva Línea Gráfica");
+    setRequesterName(""); setRequesterEmails([...DEFAULT_REQUESTER_EMAILS]); setEmailInput(""); setObjective(""); setArea(AREAS[0]);
+    setInitialComment(""); setInitialCommentImgs([]);
+  };
+  const openCreateRequest = () => {
+    setEditingReqId(null);
+    resetCreateForm();
+    // Reaplica los defaults del perfil (nombre, área, correo propio + predeterminados).
+    const def = role ? PROFILE_DEFAULTS[role] : undefined;
+    if (def?.area) setArea(def.area);
+    setRequesterName(def?.requesterName || userName);
+    const own = emailForUser(userName) || (role === 'admin' ? DEFAULT_TRAFFICKER_EMAIL : '');
+    setRequesterEmails(Array.from(new Set([own, ...DEFAULT_REQUESTER_EMAILS].map(e => e.trim()).filter(Boolean))));
+    setCreateModalOpen(true);
+  };
+  const openEditRequest = (req: RequestType) => {
+    setEditingReqId(req.id);
+    setTitleStr(req.title || ""); setCopyStr(req.copy || ""); setFormat(req.format || "static");
+    setRequestKind(req.requestKind || "Nueva Línea Gráfica");
+    setDimensions(req.dimensions || []); setCustomDim("");
+    setCountries(req.countries || []); setChannels(req.channels || []);
+    setPriority(req.priority || "Medio"); setArea(req.area || AREAS[0]);
+    setRequesterName(req.requesterName || "");
+    const ems = requesterEmailsOf(req);
+    setRequesterEmails(ems.length ? ems : []); setEmailInput("");
+    setObjective(req.objective || ""); setDeliveryDate(req.deliveryDate || "");
+    setReferenceImgs(req.referenceImages || (req.referenceImage ? [req.referenceImage] : []));
+    setReferenceFiles(req.referenceFiles || []);
+    setInitialComment(""); setInitialCommentImgs([]);
+    setModalOpen(false);
+    setCreateModalOpen(true);
+  };
+
+  // ─── Crear / editar solicitud ───
   const handleCreateRequest = async (e: React.FormEvent) => {
     e.preventDefault();
     // Incluye un correo que el usuario haya dejado escrito sin agregar.
@@ -617,7 +665,11 @@ export default function GanaPlayMainApp() {
     const emails = pendingEmail && isValidEmail(pendingEmail) && !requesterEmails.some(x => x.toLowerCase() === pendingEmail.toLowerCase())
       ? [...requesterEmails, pendingEmail]
       : requesterEmails;
-    if (!titleStr || !copyStr || !deliveryDate || dimensions.length === 0 || countries.length === 0
+    // Incluye una dimensión "Otro" escrita pero no agregada. Las dimensiones
+    // son OPCIONALES (ya no se exige al menos una).
+    const pendingDim = customDim.trim();
+    const dims = pendingDim && !dimensions.includes(pendingDim) ? [...dimensions, pendingDim] : dimensions;
+    if (!titleStr || !copyStr || !deliveryDate || countries.length === 0
       || !requesterName || emails.length === 0 || !objective || !area) {
       addToast("Completa los campos obligatorios del brief (marcados con *). Agrega al menos un correo del solicitante.", 'error');
       return;
@@ -629,6 +681,32 @@ export default function GanaPlayMainApp() {
     }
     const requesterEmail = emails[0];
     const requesterEmails2 = emails;
+
+    // ── Modo EDICIÓN: actualiza el brief de una solicitud existente ──
+    if (editingReqId) {
+      const patch = {
+        title: titleStr || "Nuevo Requerimiento", copy: copyStr, format, requestKind,
+        dimensions: dims, countries, deliveryDate, priority, area,
+        requesterName, requesterEmail, requesterEmails: requesterEmails2, objective, channels,
+        referenceImages: referenceImgs, referenceFiles,
+        history: arrayUnion({ action: "Solicitud editada", by: userName, at: new Date().toISOString() }),
+        updatedAt: serverTimestamp(),
+      };
+      try {
+        await updateDoc(doc(db, "requests", editingReqId), patch);
+        setSelectedReq(prev => (prev && prev.id === editingReqId)
+          ? { ...prev, title: patch.title, copy: copyStr, format, requestKind, dimensions: dims, countries, deliveryDate, priority, area, requesterName, requesterEmail, requesterEmails: requesterEmails2, objective, channels, referenceImages: referenceImgs, referenceFiles }
+          : prev);
+        const eid = editingReqId;
+        setEditingReqId(null);
+        resetCreateForm();
+        setCreateModalOpen(false);
+        addToast(`Solicitud ${eid} actualizada.`, 'success');
+      } catch (err: unknown) {
+        addToast("Error al guardar los cambios: " + (err instanceof Error ? err.message : "desconocido"), 'error');
+      }
+      return;
+    }
 
     const nextId = getNextId();
     const now = new Date().toISOString();
@@ -663,7 +741,7 @@ export default function GanaPlayMainApp() {
       copy: copyStr,
       format,
       requestKind,
-      dimensions,
+      dimensions: dims,
       countries,
       requestDate: now.split("T")[0],
       deliveryDate,
@@ -685,11 +763,7 @@ export default function GanaPlayMainApp() {
 
     try {
       await setDoc(doc(db, "requests", nextId), { ...newReq, updatedAt: serverTimestamp() });
-      setTitleStr(""); setCopyStr(""); setDimensions([]); setCountries([]); setChannels([]);
-      setReferenceImgs([]); setReferenceFiles([]); setPriority("Medio"); setFormat("static"); setRequestKind("Nueva Línea Gráfica");
-      setRequesterName(""); setRequesterEmails([...DEFAULT_REQUESTER_EMAILS]); setEmailInput(""); setObjective(""); setArea(AREAS[0]);
-      setInitialComment("");
-      setInitialCommentImgs([]);
+      resetCreateForm();
       setCreateModalOpen(false);
       addToast(`Solicitud ${nextId} creada correctamente.`, 'success');
       await createNotification('new_request', '📋 Nueva solicitud', `${nextId}: "${newReq.title}" — Entrega ${newReq.deliveryDate}`, 'designer', nextId);
@@ -1967,7 +2041,7 @@ export default function GanaPlayMainApp() {
         <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexShrink: 0 }}>
           {/* Todos los perfiles (incluidos diseñadores) pueden crear solicitudes. */}
           <button title="Nueva solicitud" className="btn" style={{ padding: '9px 14px', fontSize: '13px' }}
-            onClick={() => setCreateModalOpen(true)}>
+            onClick={openCreateRequest}>
             <Plus size={16} /> Nueva
           </button>
           <button title="Notificaciones" className="btn-ghost"
@@ -2048,7 +2122,7 @@ export default function GanaPlayMainApp() {
                   </div>
                   {(role === 'admin' || role === 'cm' || role === 'operator' || role === 'administrative') && col.id === 'Pendiente' && (
                     <div style={{ cursor: 'pointer', padding: '11px 14px', borderRadius: '10px', border: '1px dashed var(--accent-color)', display: 'flex', alignItems: 'center', gap: '8px', color: 'var(--accent-color)', fontSize: '13px', fontWeight: 600, background: 'var(--accent-soft)' }}
-                      onClick={() => setCreateModalOpen(true)}>
+                      onClick={openCreateRequest}>
                       <Plus size={16} /> Nueva solicitud
                     </div>
                   )}
@@ -2158,7 +2232,7 @@ export default function GanaPlayMainApp() {
                         ))}
                         {(role === 'admin' || role === 'cm' || role === 'operator' || role === 'administrative') && cards.length === 0 && (
                           <div title="Agregar solicitud en este día" style={{ opacity: 0.4, cursor: 'pointer', textAlign: 'center', fontSize: '16px', color: 'var(--accent-color)' }}
-                            onClick={() => { setDeliveryDate(day.dateStr); setCreateModalOpen(true); }}>+</div>
+                            onClick={() => { openCreateRequest(); setDeliveryDate(day.dateStr); }}>+</div>
                         )}
                       </div>
                     ))}
@@ -2535,7 +2609,7 @@ export default function GanaPlayMainApp() {
                         );
                       })}
                       {(role === 'admin' || role === 'cm' || role === 'operator' || role === 'administrative') && (
-                        <div style={{ display: 'grid', gridTemplateColumns: gridCols, minWidth: '930px', cursor: 'pointer' }} onClick={() => setCreateModalOpen(true)}>
+                        <div style={{ display: 'grid', gridTemplateColumns: gridCols, minWidth: '930px', cursor: 'pointer' }} onClick={openCreateRequest}>
                           <div style={cell()} />
                           <div style={{ ...cell({ color: 'var(--accent-color)', gap: '6px', fontWeight: 600 }), gridColumn: 'span 8' }}>
                             <Plus size={14} /> <span style={{ fontSize: '13px' }}>Agregar solicitud</span>
@@ -2701,8 +2775,8 @@ export default function GanaPlayMainApp() {
         <div style={{ position: 'fixed', inset: 0, background: 'rgba(51,51,51,0.45)', backdropFilter: 'blur(3px)', zIndex: 100, display: 'flex', justifyContent: 'center', alignItems: 'center', padding: '32px' }}>
           <div className="glass-panel" style={{ width: '100%', maxWidth: '720px', maxHeight: '92vh', overflowY: 'auto', padding: '32px' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px' }}>
-              <h2 style={{ fontSize: '24px', margin: 0, color: 'var(--text-primary)' }}>Nueva solicitud de diseño</h2>
-              <X size={24} style={{ cursor: 'pointer', color: 'var(--text-secondary)' }} onClick={() => setCreateModalOpen(false)} />
+              <h2 style={{ fontSize: '24px', margin: 0, color: 'var(--text-primary)' }}>{editingReqId ? `Editar solicitud ${editingReqId}` : 'Nueva solicitud de diseño'}</h2>
+              <X size={24} style={{ cursor: 'pointer', color: 'var(--text-secondary)' }} onClick={() => { setCreateModalOpen(false); setEditingReqId(null); }} />
             </div>
             <form onSubmit={handleCreateRequest}>
               <div className="form-group">
@@ -2829,7 +2903,7 @@ export default function GanaPlayMainApp() {
               </div>
 
               <div className="form-group">
-                <label className="label">Dimensiones / formatos requeridos *</label>
+                <label className="label">Dimensiones / formatos (opcional)</label>
                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
                   {DIMENSION_OPTIONS.map(({ key, label, sub }) => (
                     <label key={key} style={{ display: 'flex', flexDirection: 'column', gap: '2px', cursor: 'pointer', background: dimensions.includes(key) ? 'var(--accent-soft)' : 'var(--surface-1)', padding: '9px 12px', borderRadius: '10px', border: `1px solid ${dimensions.includes(key) ? 'var(--accent-color)' : 'var(--border-color)'}`, minWidth: '108px', width: 'auto' }}>
@@ -2840,6 +2914,28 @@ export default function GanaPlayMainApp() {
                       <span style={{ fontSize: '10px', color: 'var(--text-muted)', paddingLeft: '22px' }}>{sub}</span>
                     </label>
                   ))}
+                </div>
+
+                {/* Dimensiones personalizadas (Otro) */}
+                {customDimensions.length > 0 && (
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', marginTop: '10px' }}>
+                    {customDimensions.map(d => (
+                      <span key={d} style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', background: 'var(--accent-soft)', color: 'var(--accent-dark)', border: '1px solid var(--accent-color)', borderRadius: '20px', padding: '5px 10px', fontSize: '12px', fontWeight: 600 }}>
+                        {d}
+                        <X size={13} style={{ cursor: 'pointer' }} onClick={() => setDimensions(prev => prev.filter(x => x !== d))} />
+                      </span>
+                    ))}
+                  </div>
+                )}
+
+                {/* Otro: escribir dimensiones en texto */}
+                <div style={{ display: 'flex', gap: '8px', marginTop: '10px' }}>
+                  <input type="text" value={customDim} onChange={e => setCustomDim(e.target.value)}
+                    onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addCustomDimension(customDim); } }}
+                    placeholder="Otro… escribe la dimensión (ej. 300 × 280, 1080 × 1350, formato libre)" style={{ flex: 1, fontSize: '13px' }} />
+                  <button type="button" className="btn-secondary" style={{ padding: '9px 14px', fontSize: '13px', borderRadius: '10px', cursor: 'pointer' }} onClick={() => addCustomDimension(customDim)}>
+                    <Plus size={15} /> Añadir
+                  </button>
                 </div>
               </div>
 
@@ -2928,6 +3024,7 @@ export default function GanaPlayMainApp() {
                 </div>
               </div>
 
+              {!editingReqId && (
               <div className="form-group">
                 <label className="label">
                   Comentarios / Recomendaciones iniciales (opcional)
@@ -2972,9 +3069,10 @@ export default function GanaPlayMainApp() {
                   Podrás seguir añadiendo comentarios e imágenes dentro de la solicitud después de crearla.
                 </p>
               </div>
+              )}
 
               <button type="submit" className="btn" style={{ width: '100%', marginTop: '12px', padding: '15px' }}>
-                <ClipboardList size={18} /> Crear y asignar solicitud
+                <ClipboardList size={18} /> {editingReqId ? 'Guardar cambios' : 'Crear y asignar solicitud'}
               </button>
             </form>
           </div>
@@ -3041,6 +3139,21 @@ export default function GanaPlayMainApp() {
 
                 {/* Spacer flexible para empujar acciones destructivas a la derecha */}
                 <div style={{ flex: 1 }} />
+
+                {/* Editar solicitud — equipo solicitante (no diseñadores) */}
+                {(role === 'admin' || role === 'cm' || role === 'operator' || role === 'administrative') && selectedReq.status !== 'Declinada' && (
+                  <button
+                    onClick={() => openEditRequest(selectedReq)}
+                    style={{
+                      padding: '9px 16px', fontSize: '12.5px', fontWeight: 700,
+                      background: 'var(--surface-1)', color: 'var(--accent-dark)',
+                      border: '1px solid var(--accent-color)', borderRadius: '10px',
+                      cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px', width: 'auto',
+                    }}
+                  >
+                    <Pencil size={14} /> Editar
+                  </button>
+                )}
 
                 {/* Declinar solicitud — equipo interno autorizado */}
                 {canDecline && selectedReq.status !== "Declinada" && (
