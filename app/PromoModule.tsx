@@ -16,7 +16,7 @@
 import React, { useState, useEffect, ChangeEvent } from "react";
 import {
   Megaphone, UploadCloud, Download, Trash2, Pencil, X, MessageSquare, Send,
-  Copy, ExternalLink, FileText, Image as ImageIcon, RefreshCw, Loader2,
+  Copy, ExternalLink, FileText, Image as ImageIcon, RefreshCw, Loader2, FileArchive,
 } from "lucide-react";
 import { db, storage } from "@/lib/firebase";
 import { collection, onSnapshot, query, where } from "firebase/firestore";
@@ -31,8 +31,9 @@ import {
 type Toast = (msg: string, type?: "success" | "error" | "info") => void;
 type Props = { role: string | null; userName: string; addToast: Toast };
 
-const MAX_BYTES = 50 * 1024 * 1024; // 50 MB
-const ALLOWED = ["jpg", "jpeg", "png", "webp", "gif", "pdf", "mp4", "mov", "webm"];
+const MAX_BYTES = 150 * 1024 * 1024; // 150 MB (carpetas .rar/.zip pueden ser grandes)
+const ALLOWED = ["jpg", "jpeg", "png", "webp", "gif", "pdf", "mp4", "mov", "webm", "rar", "zip", "7z", "tar", "gz"];
+const ACCEPT_ATTR = ".jpg,.jpeg,.png,.webp,.gif,.pdf,.mp4,.mov,.webm,.rar,.zip,.7z,.tar,.gz";
 
 export default function PromoModule({ role, userName, addToast }: Props) {
   const canManage = role === "designer";
@@ -83,16 +84,17 @@ export default function PromoModule({ role, userName, addToast }: Props) {
   // ── Subida de archivo a Storage (con respaldo data URL para imágenes) ──
   const uploadFile = async (file: File): Promise<{ url: string; type: Promo["fileType"] } | null> => {
     const ext = (file.name.split(".").pop() || "").toLowerCase();
-    if (!ALLOWED.includes(ext)) { addToast(`Formato no permitido (usa ${ALLOWED.join(", ")}).`, "error"); return null; }
-    if (file.size > MAX_BYTES) { addToast("El archivo supera 50 MB.", "error"); return null; }
+    if (!ALLOWED.includes(ext)) { addToast(`Formato no permitido (usa imágenes, PDF, video o carpetas .rar/.zip).`, "error"); return null; }
+    if (file.size > MAX_BYTES) { addToast("El archivo supera 150 MB.", "error"); return null; }
     const type = fileTypeOf(file.name);
     const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, "_");
     addToast(`Subiendo "${safeName}"…`, "info");
     try {
       const storageRef = ref(storage, `promos/${Date.now()}_${Math.random().toString(36).slice(2, 7)}_${safeName}`);
+      // Timeout amplio: las carpetas comprimidas pueden pesar bastante.
       const snap = await Promise.race([
         uploadBytes(storageRef, file),
-        new Promise<never>((_, rej) => setTimeout(() => rej(new Error("timeout")), 30000)),
+        new Promise<never>((_, rej) => setTimeout(() => rej(new Error("timeout")), 120000)),
       ]);
       const url = await getDownloadURL(snap.ref);
       return { url, type };
@@ -106,7 +108,7 @@ export default function PromoModule({ role, userName, addToast }: Props) {
           return { url: dataUrl, type };
         } catch { /* cae abajo */ }
       }
-      addToast(`No se pudo subir "${safeName}". Para PDF/video activa Firebase Storage.`, "error");
+      addToast(`No se pudo subir "${safeName}". Para PDF, video o carpetas (.rar/.zip) debe estar activo Firebase Storage.`, "error");
       return null;
     }
   };
@@ -214,7 +216,7 @@ export default function PromoModule({ role, userName, addToast }: Props) {
           {canManage && (
             <label className="btn" style={{ padding: "9px 14px", fontSize: "13px", cursor: "pointer", display: "inline-flex", alignItems: "center", gap: "6px" }}>
               {uploading ? <Loader2 size={15} className="spin" /> : <UploadCloud size={15} />} Subir promocional
-              <input type="file" multiple accept=".jpg,.jpeg,.png,.webp,.gif,.pdf,.mp4,.mov,.webm" style={{ display: "none" }} onChange={handleUpload} disabled={uploading} />
+              <input type="file" multiple accept={ACCEPT_ATTR} style={{ display: "none" }} onChange={handleUpload} disabled={uploading} />
             </label>
           )}
         </div>
@@ -264,7 +266,7 @@ export default function PromoModule({ role, userName, addToast }: Props) {
                       </button>
                       <label className="btn-secondary" title="Re-subir archivo" style={{ padding: "7px 10px", fontSize: "12px", borderRadius: "9px", cursor: "pointer", display: "inline-flex", alignItems: "center" }}>
                         <RefreshCw size={13} />
-                        <input type="file" accept=".jpg,.jpeg,.png,.webp,.gif,.pdf,.mp4,.mov,.webm" style={{ display: "none" }} onChange={(e) => handleReupload(p, e)} disabled={uploading} />
+                        <input type="file" accept={ACCEPT_ATTR} style={{ display: "none" }} onChange={(e) => handleReupload(p, e)} disabled={uploading} />
                       </label>
                       <button className="btn-danger" title="Eliminar" style={{ padding: "7px 10px", fontSize: "12px", borderRadius: "9px", cursor: "pointer" }} onClick={() => handleDelete(p)}>
                         <Trash2 size={13} />
@@ -324,11 +326,13 @@ function PromoPreview({ promo }: { promo: Promo }) {
   if (promo.fileType === "video") {
     return <video src={promo.fileUrl} controls style={{ width: "100%", height: H, objectFit: "cover", display: "block", background: "#000" }} />;
   }
-  const Icon = promo.fileType === "pdf" ? FileText : ImageIcon;
+  const isArchive = promo.fileType === "archive";
+  const Icon = isArchive ? FileArchive : promo.fileType === "pdf" ? FileText : ImageIcon;
+  const ext = (promo.fileName.split(".").pop() || "").toUpperCase();
   return (
     <div style={{ width: "100%", height: H, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: "8px", background: "var(--surface-1)", color: "var(--text-secondary)" }}>
       <Icon size={40} />
-      <span style={{ fontSize: "12px", textTransform: "uppercase", fontWeight: 700 }}>{promo.fileType}</span>
+      <span style={{ fontSize: "12px", textTransform: "uppercase", fontWeight: 700 }}>{isArchive ? `Carpeta ${ext}` : promo.fileType}</span>
     </div>
   );
 }

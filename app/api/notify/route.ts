@@ -31,7 +31,7 @@ type NewRequestPayload = {
 
 type DeliveryPayload = {
   type: "delivery";
-  to: string;
+  to: string | string[];   // uno o varios correos del/los solicitante(s)
   designer: string;
   pieceType: string;
   requesterName?: string;
@@ -41,7 +41,7 @@ type DeliveryPayload = {
 
 type DeclinePayload = {
   type: "decline";
-  to: string;
+  to: string | string[];
   declinedBy: string;
   reason: string;
   comment?: string;
@@ -107,7 +107,9 @@ export async function POST(req: Request) {
     // ── Entrega de pieza al solicitante ──
     if (payload.type === "delivery") {
       const { to, request: r, designer, pieceType, requesterName, deliveryDate } = payload;
-      if (!to) {
+      // Acepta uno o varios correos; el correo de entrega llega a TODOS.
+      const recipients = Array.from(new Set((Array.isArray(to) ? to : [to]).map(e => (e || "").trim()).filter(Boolean)));
+      if (recipients.length === 0) {
         return NextResponse.json({ ok: false, error: "Falta el correo del solicitante." });
       }
       // Asunto predeterminado (configurable con EMAIL_SUBJECT_DELIVERY).
@@ -131,15 +133,16 @@ export async function POST(req: Request) {
            </p>` +
           ctaButton("Ver y descargar la solicitud", `${APP_URL}`),
       });
-      const result = await sendEmail({ to: [to], subject, html });
-      console.log(`[notify] delivery ${r.id} → ${to}:`, result.ok ? "enviado" : result.error);
+      const result = await sendEmail({ to: recipients, subject, html });
+      console.log(`[notify] delivery ${r.id} → ${recipients.join(", ")}:`, result.ok ? "enviado" : result.error);
       return NextResponse.json(result);
     }
 
     // ── Declinación de solicitud (avisa al solicitante) ──
     if (payload.type === "decline") {
       const { to, request: r, declinedBy, reason, comment, requesterName } = payload;
-      if (!to) {
+      const recipients = Array.from(new Set((Array.isArray(to) ? to : [to]).map(e => (e || "").trim()).filter(Boolean)));
+      if (recipients.length === 0) {
         return NextResponse.json({ ok: false, error: "Falta el correo del solicitante." });
       }
       const subject = `[GanaPlay Diseño] Solicitud ${r.id} declinada — ${r.title}`;
@@ -157,8 +160,8 @@ export async function POST(req: Request) {
            </p>` +
           ctaButton("Ir a GanaPlay Diseño", `${APP_URL}`),
       });
-      const result = await sendEmail({ to: [to], subject, html });
-      console.log(`[notify] decline ${r.id} → ${to}:`, result.ok ? "enviado" : result.error);
+      const result = await sendEmail({ to: recipients, subject, html });
+      console.log(`[notify] decline ${r.id} → ${recipients.join(", ")}:`, result.ok ? "enviado" : result.error);
       return NextResponse.json(result);
     }
 

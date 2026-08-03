@@ -17,7 +17,7 @@ import {
   addDoc, query, orderBy, serverTimestamp, getDoc, getDocs, limit, limitToLast, arrayUnion
 } from 'firebase/firestore';
 import { ref, uploadBytes, getDownloadURL, deleteObject, listAll } from 'firebase/storage';
-import { emailForUser, DEFAULT_TRAFFICKER_EMAIL } from '@/lib/users';
+import { emailForUser, DEFAULT_TRAFFICKER_EMAIL, DEFAULT_REQUESTER_EMAILS, SUGGESTED_REQUESTER_EMAILS } from '@/lib/users';
 import { compressImageToDataUrl, validateImage } from '@/lib/image';
 import SocialMediaTab from './SocialMediaTab';
 import InfluencerModule from './InfluencerModule';
@@ -142,6 +142,13 @@ type Creative = {
 // dos archivos pueden llamarse igual y uno pisaría al otro.
 const creativeKey = (c: Creative) => c.id || `${c.type}::${c.url}`;
 
+// Todos los correos del solicitante (varios o el legado de uno solo).
+const requesterEmailsOf = (r: { requesterEmails?: string[]; requesterEmail?: string }): string[] => {
+  const many = (r.requesterEmails || []).map(e => (e || '').trim()).filter(Boolean);
+  if (many.length) return Array.from(new Set(many));
+  return r.requesterEmail && r.requesterEmail.trim() ? [r.requesterEmail.trim()] : [];
+};
+
 type AIFeedback = {
   resumen: string;
   faltantes: string[];
@@ -183,7 +190,8 @@ type RequestType = {
   // ── Campos ampliados (opcionales: compatibilidad con datos previos) ──
   area?: string;
   requesterName?: string;
-  requesterEmail?: string;
+  requesterEmail?: string;        // primer correo (compatibilidad)
+  requesterEmails?: string[];     // varios correos: la entrega les llega a todos
   objective?: string;
   channels?: string[];
   aiFeedback?: AIFeedback;
@@ -303,7 +311,10 @@ export default function GanaPlayMainApp() {
   const [priority, setPriority] = useState<RequestPriority>("Medio");
   const [area, setArea] = useState(AREAS[0]);
   const [requesterName, setRequesterName] = useState("");
-  const [requesterEmail, setRequesterEmail] = useState("");
+  // Varios correos del solicitante (la entrega les llega a todos). Arranca con
+  // los predeterminados; se pueden quitar o agregar más.
+  const [requesterEmails, setRequesterEmails] = useState<string[]>([...DEFAULT_REQUESTER_EMAILS]);
+  const [emailInput, setEmailInput] = useState("");
   const [objective, setObjective] = useState("");
   const [channels, setChannels] = useState<string[]>([]);
   const [initialComment, setInitialComment] = useState("");
@@ -515,7 +526,10 @@ export default function GanaPlayMainApp() {
     const def = PROFILE_DEFAULTS[role];
     if (def?.area) setArea(def.area);
     setRequesterName(def?.requesterName || userName);
-    setRequesterEmail(emailForUser(userName) || (role === 'admin' ? DEFAULT_TRAFFICKER_EMAIL : ''));
+    // Precarga: correo del propio usuario (para que también reciba la entrega)
+    // + los correos predeterminados. Se pueden quitar o agregar más.
+    const own = emailForUser(userName) || (role === 'admin' ? DEFAULT_TRAFFICKER_EMAIL : '');
+    setRequesterEmails(Array.from(new Set([own, ...DEFAULT_REQUESTER_EMAILS].map(e => e.trim()).filter(Boolean))));
     // Community Manager: el formato de redes ya viene sugerido (menos clics).
     if (role === 'cm') setDimensions(prev => prev.length ? prev : [DEFAULT_SOCIAL_DIMENSION]);
   }, [role, userName]);
@@ -564,18 +578,38 @@ export default function GanaPlayMainApp() {
     }
   }, [addToast]);
 
+  // ─── Correos del solicitante (varios) ───
+  const isValidEmail = (e: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e.trim());
+  const addRequesterEmail = (raw: string) => {
+    const email = raw.trim().replace(/[,;]+$/, '');
+    if (!email) return;
+    if (!isValidEmail(email)) { addToast(`"${email}" no es un correo válido.`, 'error'); return; }
+    setRequesterEmails(prev => prev.some(e => e.toLowerCase() === email.toLowerCase()) ? prev : [...prev, email]);
+    setEmailInput("");
+  };
+  const removeRequesterEmail = (email: string) =>
+    setRequesterEmails(prev => prev.filter(e => e !== email));
+
   // ─── Crear solicitud ───
   const handleCreateRequest = async (e: React.FormEvent) => {
     e.preventDefault();
+    // Incluye un correo que el usuario haya dejado escrito sin agregar.
+    const pendingEmail = emailInput.trim();
+    const emails = pendingEmail && isValidEmail(pendingEmail) && !requesterEmails.some(x => x.toLowerCase() === pendingEmail.toLowerCase())
+      ? [...requesterEmails, pendingEmail]
+      : requesterEmails;
     if (!titleStr || !copyStr || !deliveryDate || dimensions.length === 0 || countries.length === 0
-      || !requesterName || !requesterEmail || !objective || !area) {
-      addToast("Completa los campos obligatorios del brief (marcados con *).", 'error');
+      || !requesterName || emails.length === 0 || !objective || !area) {
+      addToast("Completa los campos obligatorios del brief (marcados con *). Agrega al menos un correo del solicitante.", 'error');
       return;
     }
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(requesterEmail)) {
-      addToast("El correo del solicitante no es válido.", 'error');
+    const badEmail = emails.find(e2 => !isValidEmail(e2));
+    if (badEmail) {
+      addToast(`El correo "${badEmail}" no es válido.`, 'error');
       return;
     }
+    const requesterEmail = emails[0];
+    const requesterEmails2 = emails;
 
     const nextId = getNextId();
     const now = new Date().toISOString();
@@ -619,6 +653,7 @@ export default function GanaPlayMainApp() {
       area,
       requesterName,
       requesterEmail,
+      requesterEmails: requesterEmails2,
       objective,
       channels,
       creatives: [],
@@ -632,7 +667,7 @@ export default function GanaPlayMainApp() {
       await setDoc(doc(db, "requests", nextId), { ...newReq, updatedAt: serverTimestamp() });
       setTitleStr(""); setCopyStr(""); setDimensions([]); setCountries([]); setChannels([]);
       setReferenceImgs([]); setPriority("Medio"); setFormat("static"); setRequestKind("Nueva Línea Gráfica");
-      setRequesterName(""); setRequesterEmail(""); setObjective(""); setArea(AREAS[0]);
+      setRequesterName(""); setRequesterEmails([...DEFAULT_REQUESTER_EMAILS]); setEmailInput(""); setObjective(""); setArea(AREAS[0]);
       setInitialComment("");
       setInitialCommentImgs([]);
       setCreateModalOpen(false);
@@ -718,10 +753,10 @@ export default function GanaPlayMainApp() {
 
       // Cuando el diseñador marca la solicitud como Publicado (cierre final),
       // el solicitante recibe email de confirmación. No bloquea el flujo.
-      if (newStatus === 'Publicado' && selectedReq.requesterEmail) {
+      if (newStatus === 'Publicado' && requesterEmailsOf(selectedReq).length > 0) {
         sendEmailAlert({
           type: 'delivery',
-          to: selectedReq.requesterEmail,
+          to: requesterEmailsOf(selectedReq),
           request: { id: selectedReq.id, title: selectedReq.title, status: 'Publicado' },
           designer: userName,
           pieceType: 'Solicitud finalizada y publicada',
@@ -1041,10 +1076,10 @@ export default function GanaPlayMainApp() {
 
       // Acciones secundarias NO bloqueantes:
       createNotification('creative_uploaded', '🎨 Entregable subido', `${reqSnapshot.id}: "${safeName}" por ${userName}`, 'admin', reqSnapshot.id);
-      if (reqSnapshot.requesterEmail) {
+      if (requesterEmailsOf(reqSnapshot).length > 0) {
         sendEmailAlert({
           type: "delivery",
-          to: reqSnapshot.requesterEmail,
+          to: requesterEmailsOf(reqSnapshot),
           request: { id: reqSnapshot.id, title: reqSnapshot.title, status: "En Proceso" },
           designer: userName,
           pieceType: type,
@@ -1481,10 +1516,10 @@ export default function GanaPlayMainApp() {
       );
 
       // Email al solicitante (si tiene email configurado y RESEND está activo)
-      if (req.requesterEmail) {
+      if (requesterEmailsOf(req).length > 0) {
         sendEmailAlert({
           type: "decline",
-          to: req.requesterEmail,
+          to: requesterEmailsOf(req),
           request: { id: req.id, title: req.title, status: "Declinada" },
           declinedBy: userName,
           reason,
@@ -2642,8 +2677,50 @@ export default function GanaPlayMainApp() {
               </div>
 
               <div className="form-group">
-                <label className="label">Correo del solicitante *</label>
-                <input type="email" placeholder="nombre@ganaplay.com" value={requesterEmail} onChange={(e) => setRequesterEmail(e.target.value)} required />
+                <label className="label">
+                  Correos del solicitante *
+                  <span style={{ marginLeft: '8px', fontSize: '11px', fontWeight: 400, color: 'var(--text-muted)' }}>
+                    La entrega llega a TODOS ({requesterEmails.length})
+                  </span>
+                </label>
+
+                {/* Correos ya agregados (chips) */}
+                {requesterEmails.length > 0 && (
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', marginBottom: '8px' }}>
+                    {requesterEmails.map(email => (
+                      <span key={email} style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', background: 'var(--accent-soft)', color: 'var(--accent-dark)', border: '1px solid var(--accent-color)', borderRadius: '20px', padding: '5px 10px', fontSize: '12px', fontWeight: 600 }}>
+                        <AtSign size={12} />{email}
+                        <X size={13} style={{ cursor: 'pointer' }} onClick={() => removeRequesterEmail(email)} />
+                      </span>
+                    ))}
+                  </div>
+                )}
+
+                {/* Agregar correo escrito a mano */}
+                <div style={{ display: 'flex', gap: '8px' }}>
+                  <input type="email" placeholder="agregar otro correo… (Enter)" value={emailInput}
+                    onChange={(e) => setEmailInput(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ',') { e.preventDefault(); addRequesterEmail(emailInput); } }}
+                    style={{ flex: 1 }} />
+                  <button type="button" className="btn-secondary" style={{ padding: '9px 14px', fontSize: '13px', borderRadius: '10px', cursor: 'pointer' }} onClick={() => addRequesterEmail(emailInput)}>
+                    <Plus size={15} /> Agregar
+                  </button>
+                </div>
+
+                {/* Sugerencias de un clic (las no agregadas aún) */}
+                {SUGGESTED_REQUESTER_EMAILS.filter(s => !requesterEmails.some(e => e.toLowerCase() === s.toLowerCase())).length > 0 && (
+                  <div style={{ marginTop: '10px' }}>
+                    <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginBottom: '6px' }}>Sugeridos:</div>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+                      {SUGGESTED_REQUESTER_EMAILS.filter(s => !requesterEmails.some(e => e.toLowerCase() === s.toLowerCase())).map(s => (
+                        <span key={s} onClick={() => addRequesterEmail(s)}
+                          style={{ cursor: 'pointer', background: 'var(--surface-1)', border: '1px dashed var(--border-color)', borderRadius: '20px', padding: '5px 10px', fontSize: '12px', color: 'var(--text-secondary)' }}>
+                          + {s}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                )}
               </div>
 
               <div className="form-group">
@@ -2966,13 +3043,19 @@ export default function GanaPlayMainApp() {
                       {selectedReq.area && <span className="badge" style={{ background: 'var(--surface-2)', color: 'var(--text-secondary)', fontSize: '11px' }}><Building2 size={11} style={{ display: 'inline', marginRight: '3px' }} />{selectedReq.area}</span>}
                     </div>
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-                      {(selectedReq.requesterName || selectedReq.requesterEmail) && (
+                      {(selectedReq.requesterName || requesterEmailsOf(selectedReq).length > 0) && (
                         <div style={{ background: 'var(--surface-1)', padding: '10px 12px', borderRadius: '10px', border: '1px solid var(--border-color)' }}>
                           <div style={{ fontSize: '10px', fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.8px', marginBottom: '4px' }}>Solicitante</div>
-                          <div style={{ fontSize: '13px', color: 'var(--text-primary)', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                          <div style={{ fontSize: '13px', color: 'var(--text-primary)', display: 'flex', alignItems: 'center', gap: '6px', marginBottom: requesterEmailsOf(selectedReq).length ? '6px' : 0 }}>
                             <User size={13} color="var(--text-muted)" /> {selectedReq.requesterName || '—'}
-                            {selectedReq.requesterEmail && <span style={{ color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: '4px' }}><AtSign size={12} />{selectedReq.requesterEmail}</span>}
                           </div>
+                          {requesterEmailsOf(selectedReq).length > 0 && (
+                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+                              {requesterEmailsOf(selectedReq).map(em => (
+                                <span key={em} style={{ fontSize: '11px', color: 'var(--text-muted)', display: 'inline-flex', alignItems: 'center', gap: '4px', background: 'var(--surface-2)', borderRadius: '12px', padding: '2px 8px' }}><AtSign size={11} />{em}</span>
+                              ))}
+                            </div>
+                          )}
                         </div>
                       )}
                       {selectedReq.objective && (

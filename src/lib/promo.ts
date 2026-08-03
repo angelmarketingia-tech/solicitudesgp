@@ -37,7 +37,7 @@ export type Promo = {
   description: string;
   fileUrl: string;
   fileName: string;
-  fileType: "image" | "pdf" | "video" | "other";
+  fileType: "image" | "pdf" | "video" | "archive" | "other";
   uploadedBy: string;
   createdAt?: string;
   messages: PromoComment[];
@@ -54,6 +54,7 @@ export function fileTypeOf(name: string): Promo["fileType"] {
   if (["jpg", "jpeg", "png", "webp", "gif", "avif"].includes(ext)) return "image";
   if (ext === "pdf") return "pdf";
   if (["mp4", "mov", "webm", "m4v", "avi"].includes(ext)) return "video";
+  if (["rar", "zip", "7z", "tar", "gz"].includes(ext)) return "archive"; // carpetas comprimidas
   return "other";
 }
 

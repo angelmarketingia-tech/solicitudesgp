@@ -45,12 +45,15 @@ type Role = "admin" | "cm" | "designer" | "operator" | "administrative";
 // Se puede sobrescribir/ampliar SIN desplegar código con la variable de entorno
 // AUTH_USERS (JSON): [{"email":"...","role":"designer","name":"..."}]
 const BUILTIN_DIRECTORY: { email: string; role: Role; name: string }[] = [
-  { email: "angel.vaca@ganaplay.com",       role: "admin",    name: "Trafficker" },
-  { email: "fernanda.monrroy@ganaplay.com", role: "cm",       name: "Community Manager" },
-  { email: "david.gutierrez@ganaplay.com",  role: "designer", name: "Juan David" },
-  { email: "eliana.izquierdo@ganaplay.com", role: "designer", name: "Eliana" },
-  { email: "veronica.marquez@ganaplay.com", role: "designer", name: "Verónica" },
-  { email: "caleb.guevara@ganaplay.com",    role: "designer", name: "Caleb" },
+  { email: "angel.vaca@ganaplay.com",       role: "admin",          name: "Trafficker" },
+  { email: "fernanda.monrroy@ganaplay.com", role: "cm",             name: "Community Manager" },
+  { email: "david.gutierrez@ganaplay.com",  role: "designer",       name: "Juan David" },
+  { email: "eliana.izquierdo@ganaplay.com", role: "designer",       name: "Eliana" },
+  { email: "veronica.marquez@ganaplay.com", role: "designer",       name: "Verónica" },
+  { email: "veronica@ganaplay.com",         role: "designer",       name: "Verónica" },
+  { email: "caleb.guevara@ganaplay.com",    role: "designer",       name: "Caleb" },
+  { email: "roberto.andrade@ganaplay.com",  role: "administrative", name: "Roberto" },
+  { email: "juan.gutierrez@ganaplay.com",   role: "operator",       name: "Juan" },
 ];
 
 function buildDirectory(): Map<string, { role: Role; name: string }> {

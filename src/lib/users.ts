@@ -25,13 +25,31 @@ export const USER_DIRECTORY: Record<string, string> = {
   "Eliana": "Eliana.Izquierdo@ganaplay.com",
   "Verónica": "veronica.marquez@ganaplay.com",
   "Caleb": "caleb.guevara@ganaplay.com",
-  // Operadores y Directivos: completar cuando sepamos sus emails.
-  "Roberto": "",
+  "Roberto": "roberto.andrade@ganaplay.com",
+  "Juan": "juan.gutierrez@ganaplay.com",
+  // Operadores y Directivos restantes: completar cuando sepamos sus emails.
   "Quota": "",
-  "Juan": "",
   "Andres": "",
   "Sebastian": "",
 };
+
+/**
+ * Correos que aparecen PRE-SELECCIONADOS al crear una solicitud (para que la
+ * entrega les llegue por defecto). El solicitante puede quitar o agregar más.
+ */
+export const DEFAULT_REQUESTER_EMAILS: string[] = [
+  "angel.vaca@ganaplay.com",
+  "roberto.andrade@ganaplay.com",
+  "fernanda.monrroy@ganaplay.com",
+];
+
+/** Correos sugeridos (chips de un clic) al elegir destinatarios de la solicitud. */
+export const SUGGESTED_REQUESTER_EMAILS: string[] = Array.from(
+  new Set([
+    ...DEFAULT_REQUESTER_EMAILS,
+    ...Object.values(USER_DIRECTORY).filter(Boolean),
+  ]),
+);
 
 /** Lista de operadores válidos (Quota, Juan) — espejo del backend. */
 export const OPERATOR_USERS = ["Quota", "Juan"] as const;

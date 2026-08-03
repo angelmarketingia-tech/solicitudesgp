@@ -14,7 +14,7 @@
  */
 
 import React, { use, useEffect, useMemo, useState } from "react";
-import { Download, MessageSquare, Send, FileText, Film, Image as ImageIcon, Lock, Megaphone } from "lucide-react";
+import { Download, MessageSquare, Send, FileText, Image as ImageIcon, Lock, Megaphone, FileArchive } from "lucide-react";
 import { db } from "@/lib/firebase";
 import { collection, onSnapshot, query, where } from "firebase/firestore";
 import {
@@ -187,11 +187,13 @@ function Preview({ promo }: { promo: Promo }) {
   const H = "170px";
   if (promo.fileType === "image") return <img src={promo.fileUrl} alt={promo.title} style={{ width: "100%", height: H, objectFit: "cover", display: "block", background: "var(--surface-2)" }} />;
   if (promo.fileType === "video") return <video src={promo.fileUrl} controls style={{ width: "100%", height: H, objectFit: "cover", display: "block", background: "#000" }} />;
-  const Icon = promo.fileType === "pdf" ? FileText : ImageIcon;
+  const isArchive = promo.fileType === "archive";
+  const Icon = isArchive ? FileArchive : promo.fileType === "pdf" ? FileText : ImageIcon;
+  const ext = (promo.fileName.split(".").pop() || "").toUpperCase();
   return (
     <div style={{ width: "100%", height: H, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: "8px", background: "var(--surface-1)", color: "var(--text-secondary)" }}>
       <Icon size={40} />
-      <span style={{ fontSize: "12px", textTransform: "uppercase", fontWeight: 700 }}>{promo.fileType}</span>
+      <span style={{ fontSize: "12px", textTransform: "uppercase", fontWeight: 700 }}>{isArchive ? `Carpeta ${ext}` : promo.fileType}</span>
     </div>
   );
 }
