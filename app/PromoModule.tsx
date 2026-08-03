@@ -97,7 +97,9 @@ export default function PromoModule({ role, userName, addToast }: Props) {
     const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, "_");
     addToast(`Subiendo "${safeName}"…`, "info");
     try {
-      const storageRef = ref(storage, `promos/${Date.now()}_${Math.random().toString(36).slice(2, 7)}_${safeName}`);
+      // Ruta bajo `creatives/` (permitida por las reglas de Storage, la misma
+      // de los entregables). La carpeta `promos/` estaba bloqueada por reglas.
+      const storageRef = ref(storage, `creatives/_promos/${Date.now()}_${Math.random().toString(36).slice(2, 7)}_${safeName}`);
       const snap = await Promise.race([
         uploadBytes(storageRef, file),
         new Promise<never>((_, rej) => setTimeout(() => rej(new Error("timeout")), 120000)),

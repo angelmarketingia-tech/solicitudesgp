@@ -142,6 +142,15 @@ type Creative = {
 // dos archivos pueden llamarse igual y uno pisaría al otro.
 const creativeKey = (c: Creative) => c.id || `${c.type}::${c.url}`;
 
+// Lee un archivo como data URL (respaldo cuando Storage no está disponible).
+const readFileAsDataUrl = (file: Blob): Promise<string> =>
+  new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onloadend = () => resolve(r.result as string);
+    r.onerror = reject;
+    r.readAsDataURL(file);
+  });
+
 // Todos los correos del solicitante (varios o el legado de uno solo).
 const requesterEmailsOf = (r: { requesterEmails?: string[]; requesterEmail?: string }): string[] => {
   const many = (r.requesterEmails || []).map(e => (e || '').trim()).filter(Boolean);
@@ -722,18 +731,30 @@ export default function GanaPlayMainApp() {
           newImgs.push(await compressImageToDataUrl(file));
         } else if (isDoc) {
           if (file.size > 15 * 1024 * 1024) { addToast(`"${file.name}" supera 15 MB.`, 'error'); rejected++; continue; }
+          const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_');
+          addToast(`Subiendo "${safeName}"…`, 'info');
+          let url: string | null = null;
+          // 1) Storage bajo `creatives/` (ruta permitida por las reglas, la
+          //    misma de los entregables). Sin límite de tamaño.
           try {
-            const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_');
-            addToast(`Subiendo "${safeName}"…`, 'info');
-            const storageRef = ref(storage, `references/${Date.now()}_${Math.random().toString(36).slice(2, 7)}_${safeName}`);
+            const storageRef = ref(storage, `creatives/_references/${Date.now()}_${Math.random().toString(36).slice(2, 7)}_${safeName}`);
             const snap = await Promise.race([
               uploadBytes(storageRef, file),
               new Promise<never>((_, rej) => setTimeout(() => rej(new Error('timeout')), 60000)),
             ]);
-            const url = await getDownloadURL(snap.ref);
-            newFiles.push({ name: file.name, url, type: ext });
+            url = await getDownloadURL(snap.ref);
           } catch {
-            addToast(`No se pudo subir "${file.name}". Para PDF/Word debe estar activo Firebase Storage.`, 'error');
+            // 2) Respaldo para archivos pequeños: data URL en el propio doc
+            //    (así el diseñador igual lo puede descargar). Cap conservador
+            //    para no acercarse al límite de 1 MB del documento.
+            if (file.size <= 480 * 1024) {
+              try { url = await readFileAsDataUrl(file); } catch { /* cae abajo */ }
+            }
+          }
+          if (url) {
+            newFiles.push({ name: file.name, url, type: ext });
+          } else {
+            addToast(`No se pudo adjuntar "${file.name}". Intenta de nuevo o usa un archivo más liviano.`, 'error');
             rejected++;
           }
         } else {
