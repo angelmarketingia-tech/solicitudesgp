@@ -3140,8 +3140,8 @@ export default function GanaPlayMainApp() {
                 {/* Spacer flexible para empujar acciones destructivas a la derecha */}
                 <div style={{ flex: 1 }} />
 
-                {/* Editar solicitud — equipo solicitante (no diseñadores) */}
-                {(role === 'admin' || role === 'cm' || role === 'operator' || role === 'administrative') && selectedReq.status !== 'Declinada' && (
+                {/* Editar solicitud — todos los perfiles (incluidos diseñadores) */}
+                {selectedReq.status !== 'Declinada' && (
                   <button
                     onClick={() => openEditRequest(selectedReq)}
                     style={{
