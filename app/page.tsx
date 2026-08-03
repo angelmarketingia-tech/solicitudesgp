@@ -165,6 +165,14 @@ type HistoryEntry = {
   at: string;
 };
 
+// Documento de referencia (PDF/Word) adjunto a una solicitud. Va a Storage,
+// no como data URL, para no romper el límite de 1 MB del documento.
+type ReferenceFile = {
+  name: string;
+  url: string;
+  type: string;   // extensión: pdf | doc | docx
+};
+
 type RequestType = {
   id: string;
   title: string;
@@ -179,7 +187,8 @@ type RequestType = {
   status: RequestStatus;
   priority: RequestPriority;
   referenceImage?: string;        // legacy: una sola imagen (compatibilidad con datos previos)
-  referenceImages?: string[];     // varias imágenes de referencia (sin límite)
+  referenceImages?: string[];     // varias imágenes de referencia (data URLs)
+  referenceFiles?: ReferenceFile[]; // documentos de referencia (PDF/Word) en Storage
   assignedTo?: string;
   creatives: Creative[];
   comments?: number;
@@ -308,6 +317,7 @@ export default function GanaPlayMainApp() {
   const [dimensions, setDimensions] = useState<string[]>([]);
   const [countries, setCountries] = useState<string[]>([]);
   const [referenceImgs, setReferenceImgs] = useState<string[]>([]);
+  const [referenceFiles, setReferenceFiles] = useState<ReferenceFile[]>([]);
   const [priority, setPriority] = useState<RequestPriority>("Medio");
   const [area, setArea] = useState(AREAS[0]);
   const [requesterName, setRequesterName] = useState("");
@@ -661,12 +671,13 @@ export default function GanaPlayMainApp() {
       history: [{ action: "Solicitud creada", by: requesterName, at: now }],
       ...(initialMessages.length > 0 ? { messages: initialMessages } : {}),
       ...(referenceImgs.length > 0 ? { referenceImages: referenceImgs } : {}),
+      ...(referenceFiles.length > 0 ? { referenceFiles } : {}),
     };
 
     try {
       await setDoc(doc(db, "requests", nextId), { ...newReq, updatedAt: serverTimestamp() });
       setTitleStr(""); setCopyStr(""); setDimensions([]); setCountries([]); setChannels([]);
-      setReferenceImgs([]); setPriority("Medio"); setFormat("static"); setRequestKind("Nueva Línea Gráfica");
+      setReferenceImgs([]); setReferenceFiles([]); setPriority("Medio"); setFormat("static"); setRequestKind("Nueva Línea Gráfica");
       setRequesterName(""); setRequesterEmails([...DEFAULT_REQUESTER_EMAILS]); setEmailInput(""); setObjective(""); setArea(AREAS[0]);
       setInitialComment("");
       setInitialCommentImgs([]);
@@ -689,35 +700,53 @@ export default function GanaPlayMainApp() {
     }
   };
 
-  // Imágenes de referencia: se comprimen y guardan como data URLs (no usa Storage).
-  // Acepta varios archivos a la vez y los acumula sin límite.
+  // Referencias: IMÁGENES → data URL comprimida (sin Storage); DOCUMENTOS
+  // (PDF/Word) → Firebase Storage (para no romper el límite de 1 MB del doc).
+  // Acepta varios archivos a la vez y los acumula.
   const handleRefUpload = async (e: ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(e.target.files ?? []);
     e.target.value = "";
     if (files.length === 0) return;
     setLoading(true);
     try {
-      const dataUrls: string[] = [];
+      const newImgs: string[] = [];
+      const newFiles: ReferenceFile[] = [];
       let rejected = 0;
       for (const file of files) {
-        const err = validateImage(file);
-        if (err) { rejected++; continue; }
-        dataUrls.push(await compressImageToDataUrl(file));
+        const ext = (file.name.split('.').pop() || '').toLowerCase();
+        const isImg = file.type.startsWith('image/') || ['jpg', 'jpeg', 'png', 'webp', 'gif'].includes(ext);
+        const isDoc = ['pdf', 'doc', 'docx'].includes(ext);
+        if (isImg) {
+          const err = validateImage(file);
+          if (err) { rejected++; continue; }
+          newImgs.push(await compressImageToDataUrl(file));
+        } else if (isDoc) {
+          if (file.size > 15 * 1024 * 1024) { addToast(`"${file.name}" supera 15 MB.`, 'error'); rejected++; continue; }
+          try {
+            const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_');
+            addToast(`Subiendo "${safeName}"…`, 'info');
+            const storageRef = ref(storage, `references/${Date.now()}_${Math.random().toString(36).slice(2, 7)}_${safeName}`);
+            const snap = await Promise.race([
+              uploadBytes(storageRef, file),
+              new Promise<never>((_, rej) => setTimeout(() => rej(new Error('timeout')), 60000)),
+            ]);
+            const url = await getDownloadURL(snap.ref);
+            newFiles.push({ name: file.name, url, type: ext });
+          } catch {
+            addToast(`No se pudo subir "${file.name}". Para PDF/Word debe estar activo Firebase Storage.`, 'error');
+            rejected++;
+          }
+        } else {
+          rejected++;
+        }
       }
-      if (dataUrls.length > 0) {
-        setReferenceImgs((prev) => [...prev, ...dataUrls]);
-        addToast(
-          dataUrls.length === 1
-            ? "Imagen de referencia lista."
-            : `${dataUrls.length} imágenes de referencia listas.`,
-          'success'
-        );
-      }
-      if (rejected > 0) {
-        addToast(`${rejected} archivo(s) se omitieron (formato o tamaño no válido).`, 'error');
-      }
+      if (newImgs.length) setReferenceImgs((prev) => [...prev, ...newImgs]);
+      if (newFiles.length) setReferenceFiles((prev) => [...prev, ...newFiles]);
+      const total = newImgs.length + newFiles.length;
+      if (total > 0) addToast(`${total} referencia${total > 1 ? 's' : ''} lista${total > 1 ? 's' : ''}.`, 'success');
+      if (rejected > 0) addToast(`${rejected} archivo(s) se omitieron (usa imágenes, PDF o Word).`, 'error');
     } catch (e2: unknown) {
-      addToast("Error procesando las imágenes: " + (e2 instanceof Error ? e2.message : ""), 'error');
+      addToast("Error procesando las referencias: " + (e2 instanceof Error ? e2.message : ""), 'error');
     } finally {
       setLoading(false);
     }
@@ -2808,10 +2837,10 @@ export default function GanaPlayMainApp() {
 
               <div className="form-group">
                 <label className="label">
-                  Imágenes de referencia (opcional)
-                  {referenceImgs.length > 0 && (
+                  Referencias (opcional)
+                  {(referenceImgs.length + referenceFiles.length) > 0 && (
                     <span style={{ marginLeft: '8px', fontSize: '11px', fontWeight: 700, color: 'var(--accent-color)' }}>
-                      {referenceImgs.length} {referenceImgs.length === 1 ? 'imagen' : 'imágenes'}
+                      {referenceImgs.length + referenceFiles.length} archivo{(referenceImgs.length + referenceFiles.length) === 1 ? '' : 's'}
                     </span>
                   )}
                 </label>
@@ -2833,15 +2862,29 @@ export default function GanaPlayMainApp() {
                   </div>
                 )}
 
+                {/* Documentos de referencia (PDF/Word) */}
+                {referenceFiles.length > 0 && (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', marginBottom: '12px' }}>
+                    {referenceFiles.map((f, i) => (
+                      <div key={i} style={{ display: 'flex', alignItems: 'center', gap: '8px', background: 'var(--surface-1)', border: '1px solid var(--border-color)', borderRadius: '10px', padding: '8px 12px' }}>
+                        <FileText size={16} color={f.type === 'pdf' ? 'var(--danger)' : 'var(--info)'} />
+                        <span style={{ flex: 1, fontSize: '13px', color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{f.name}</span>
+                        <span className="badge" style={{ background: 'var(--surface-2)', color: 'var(--text-secondary)', fontSize: '10px' }}>{f.type.toUpperCase()}</span>
+                        <X size={15} style={{ cursor: 'pointer', color: 'var(--danger)' }} onClick={() => setReferenceFiles(prev => prev.filter((_, idx) => idx !== i))} />
+                      </div>
+                    ))}
+                  </div>
+                )}
+
                 <label style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '10px', padding: '26px', background: 'var(--surface-1)', borderRadius: '14px', border: '2px dashed var(--accent-color)', cursor: 'pointer', position: 'relative', width: 'auto' }}>
                   <UploadCloud size={36} color="var(--accent-color)" />
                   <div style={{ textAlign: 'center' }}>
                     <div style={{ fontWeight: 700, color: 'var(--text-primary)', marginBottom: '4px' }}>
-                      {referenceImgs.length > 0 ? 'Añadir más imágenes' : 'Sube imágenes de referencia'}
+                      {(referenceImgs.length + referenceFiles.length) > 0 ? 'Añadir más referencias' : 'Sube referencias'}
                     </div>
-                    <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>Puedes seleccionar varias · JPG, PNG o GIF (máx. 8 MB c/u)</div>
+                    <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>Imágenes (JPG, PNG, GIF) · o documentos <strong>PDF</strong> y <strong>Word</strong></div>
                   </div>
-                  <input type="file" accept="image/*" multiple style={{ display: 'none' }} onChange={handleRefUpload} />
+                  <input type="file" accept="image/*,.pdf,.doc,.docx,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document" multiple style={{ display: 'none' }} onChange={handleRefUpload} />
                 </label>
               </div>
 
@@ -3131,6 +3174,26 @@ export default function GanaPlayMainApp() {
                         </div>
                       );
                     })()}
+
+                    {/* Documentos de referencia (PDF/Word) */}
+                    {selectedReq.referenceFiles && selectedReq.referenceFiles.length > 0 && (
+                      <div style={{ marginTop: '14px' }}>
+                        <div style={{ fontSize: '10px', fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.8px', marginBottom: '8px' }}>
+                          Documentos de referencia ({selectedReq.referenceFiles.length})
+                        </div>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                          {selectedReq.referenceFiles.map((f, i) => (
+                            <a key={i} href={f.url} target="_blank" rel="noreferrer" download={f.name}
+                              style={{ display: 'flex', alignItems: 'center', gap: '8px', background: 'var(--surface-1)', border: '1px solid var(--border-color)', borderRadius: '10px', padding: '9px 12px', textDecoration: 'none' }}>
+                              <FileText size={16} color={f.type === 'pdf' ? 'var(--danger)' : 'var(--info)'} />
+                              <span style={{ flex: 1, fontSize: '13px', color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{f.name}</span>
+                              <span className="badge" style={{ background: 'var(--surface-2)', color: 'var(--text-secondary)', fontSize: '10px' }}>{(f.type || '').toUpperCase()}</span>
+                              <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', fontSize: '11px', fontWeight: 600, color: 'var(--accent-dark)' }}><Download size={12} /> Abrir</span>
+                            </a>
+                          ))}
+                        </div>
+                      </div>
+                    )}
                   </div>
 
                   {/* Panel feedback IA */}
