@@ -18,10 +18,10 @@ import {
   Copy, ExternalLink, FileText, Image as ImageIcon, RefreshCw, Loader2, FileArchive,
   Folder, FolderPlus, ChevronRight, Home, FolderInput, Link2,
 } from "lucide-react";
-import { db, storage } from "@/lib/firebase";
+import { db } from "@/lib/firebase";
 import { collection, onSnapshot, query, where } from "firebase/firestore";
-import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
 import { compressImageToDataUrl } from "@/lib/image";
+import { uploadToStorage, storageErrorMessage } from "@/lib/storage-upload";
 import {
   PromoItem, PromoComment, PromoConfig, PROMO_ROOT,
   itemFromDoc, configFromDoc, fileTypeOf, getOrCreateConfig, sortItems, breadcrumb, descendantIds,
@@ -109,12 +109,7 @@ export default function PromoModule({ role, userName, addToast }: Props) {
     try {
       // Ruta bajo `creatives/` (permitida por las reglas de Storage, la misma
       // de los entregables). La carpeta `promos/` estaba bloqueada por reglas.
-      const storageRef = ref(storage, `creatives/_promos/${Date.now()}_${Math.random().toString(36).slice(2, 7)}_${safeName}`);
-      const snap = await Promise.race([
-        uploadBytes(storageRef, file),
-        new Promise<never>((_, rej) => setTimeout(() => rej(new Error("timeout")), 120000)),
-      ]);
-      const url = await getDownloadURL(snap.ref);
+      const url = await uploadToStorage("creatives/_promos", file);
       return { url, type };
     } catch (err) {
       console.warn("[promo] Storage falló:", err);
@@ -125,7 +120,7 @@ export default function PromoModule({ role, userName, addToast }: Props) {
           return { url: dataUrl, type };
         } catch { /* cae abajo */ }
       }
-      addToast(`No se pudo subir "${safeName}". Para PDF, video o carpetas debe estar activo Firebase Storage.`, "error");
+      addToast(`No se pudo subir "${safeName}". ${storageErrorMessage(err)}`, "error");
       return null;
     }
   };

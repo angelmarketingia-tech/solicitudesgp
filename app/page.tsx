@@ -16,9 +16,10 @@ import {
   collection, doc, onSnapshot, setDoc, updateDoc, deleteDoc,
   addDoc, query, orderBy, serverTimestamp, getDoc, getDocs, limit, limitToLast, arrayUnion
 } from 'firebase/firestore';
-import { ref, uploadBytes, getDownloadURL, deleteObject, listAll } from 'firebase/storage';
+import { ref, deleteObject, listAll } from 'firebase/storage';
 import { emailForUser, DEFAULT_TRAFFICKER_EMAIL, DEFAULT_REQUESTER_EMAILS, SUGGESTED_REQUESTER_EMAILS } from '@/lib/users';
 import { compressImageToDataUrl, validateImage } from '@/lib/image';
+import { uploadToStorage, storageErrorMessage } from '@/lib/storage-upload';
 import SocialMediaTab from './SocialMediaTab';
 import InfluencerModule from './InfluencerModule';
 import PromoModule from './PromoModule';
@@ -182,6 +183,12 @@ type ReferenceFile = {
   type: string;   // extensión: pdf | doc | docx
 };
 
+// Límites de las referencias de una solicitud.
+const REF_IMAGE_EXTS = ['jpg', 'jpeg', 'png', 'webp', 'gif'];
+const REF_DOC_EXTS = ['pdf', 'doc', 'docx'];
+const MAX_REF_DOC_BYTES = 50 * 1024 * 1024;   // 50 MB por archivo (van a Storage)
+const MAX_REF_INLINE_BYTES = 480 * 1024;      // respaldo dentro del doc de Firestore
+
 type RequestType = {
   id: string;
   title: string;
@@ -327,6 +334,7 @@ export default function GanaPlayMainApp() {
   const [countries, setCountries] = useState<string[]>([]);
   const [referenceImgs, setReferenceImgs] = useState<string[]>([]);
   const [referenceFiles, setReferenceFiles] = useState<ReferenceFile[]>([]);
+  const [refProgress, setRefProgress] = useState<string | null>(null); // "Subiendo X… 42%"
   const [customDim, setCustomDim] = useState("");            // dimensión "Otro" en texto
   const [editingReqId, setEditingReqId] = useState<string | null>(null); // id si estamos editando
   const [priority, setPriority] = useState<RequestPriority>("Medio");
@@ -783,8 +791,10 @@ export default function GanaPlayMainApp() {
     }
   };
 
-  // Referencias: IMÁGENES → data URL comprimida (sin Storage); DOCUMENTOS
-  // (PDF/Word) → Firebase Storage (para no romper el límite de 1 MB del doc).
+  // Referencias:
+  //  · Imágenes JPG/PNG/WEBP → data URL comprimida (no gastan Storage).
+  //  · GIF o imágenes muy grandes → Storage (comprimir un GIF lo rompería).
+  //  · Documentos (PDF/Word) → Storage, hasta MAX_REF_DOC_BYTES.
   // Acepta varios archivos a la vez y los acumula.
   const handleRefUpload = async (e: ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(e.target.files ?? []);
@@ -794,55 +804,66 @@ export default function GanaPlayMainApp() {
     try {
       const newImgs: string[] = [];
       const newFiles: ReferenceFile[] = [];
-      let rejected = 0;
+      const problems: string[] = [];       // motivo real de cada archivo omitido
       for (const file of files) {
         const ext = (file.name.split('.').pop() || '').toLowerCase();
-        const isImg = file.type.startsWith('image/') || ['jpg', 'jpeg', 'png', 'webp', 'gif'].includes(ext);
-        const isDoc = ['pdf', 'doc', 'docx'].includes(ext);
-        if (isImg) {
-          const err = validateImage(file);
-          if (err) { rejected++; continue; }
-          newImgs.push(await compressImageToDataUrl(file));
-        } else if (isDoc) {
-          if (file.size > 15 * 1024 * 1024) { addToast(`"${file.name}" supera 15 MB.`, 'error'); rejected++; continue; }
-          const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_');
-          addToast(`Subiendo "${safeName}"…`, 'info');
-          let url: string | null = null;
-          // 1) Storage bajo `creatives/` (ruta permitida por las reglas, la
-          //    misma de los entregables). Sin límite de tamaño.
+        const isImg = file.type.startsWith('image/') || REF_IMAGE_EXTS.includes(ext);
+        const isDoc = REF_DOC_EXTS.includes(ext);
+
+        if (!isImg && !isDoc) {
+          problems.push(`"${file.name}": formato no admitido (usa imágenes, PDF o Word).`);
+          continue;
+        }
+        if (file.size > MAX_REF_DOC_BYTES) {
+          problems.push(`"${file.name}" supera el límite de ${Math.round(MAX_REF_DOC_BYTES / 1024 / 1024)} MB.`);
+          continue;
+        }
+
+        // Imágenes comprimibles (JPG/PNG/WEBP y no gigantes): van en el doc.
+        if (isImg && !validateImage(file)) {
           try {
-            const storageRef = ref(storage, `creatives/_references/${Date.now()}_${Math.random().toString(36).slice(2, 7)}_${safeName}`);
-            const snap = await Promise.race([
-              uploadBytes(storageRef, file),
-              new Promise<never>((_, rej) => setTimeout(() => rej(new Error('timeout')), 60000)),
-            ]);
-            url = await getDownloadURL(snap.ref);
-          } catch {
-            // 2) Respaldo para archivos pequeños: data URL en el propio doc
-            //    (así el diseñador igual lo puede descargar). Cap conservador
-            //    para no acercarse al límite de 1 MB del documento.
-            if (file.size <= 480 * 1024) {
-              try { url = await readFileAsDataUrl(file); } catch { /* cae abajo */ }
-            }
+            newImgs.push(await compressImageToDataUrl(file));
+            continue;
+          } catch (imgErr) {
+            console.warn('[referencias] no se pudo comprimir, se sube a Storage:', imgErr);
           }
-          if (url) {
-            newFiles.push({ name: file.name, url, type: ext });
+        }
+
+        // Todo lo demás (GIF, imágenes grandes, PDF, Word) → Storage.
+        setRefProgress(`Subiendo "${file.name}"…`);
+        try {
+          const url = await uploadToStorage('creatives/_references', file, {
+            onProgress: (pct) => setRefProgress(`Subiendo "${file.name}"… ${pct}%`),
+          });
+          if (isImg) newImgs.push(url);
+          else newFiles.push({ name: file.name, url, type: ext });
+        } catch (upErr) {
+          console.error('[referencias] Storage falló:', upErr);
+          // Respaldo solo para archivos pequeños: data URL dentro del propio
+          // documento (el límite de un doc de Firestore es 1 MB).
+          let fallback: string | null = null;
+          if (file.size <= MAX_REF_INLINE_BYTES) {
+            try { fallback = await readFileAsDataUrl(file); } catch { /* cae abajo */ }
+          }
+          if (fallback) {
+            if (isImg) newImgs.push(fallback);
+            else newFiles.push({ name: file.name, url: fallback, type: ext });
           } else {
-            addToast(`No se pudo adjuntar "${file.name}". Intenta de nuevo o usa un archivo más liviano.`, 'error');
-            rejected++;
+            problems.push(`No se pudo adjuntar "${file.name}". ${storageErrorMessage(upErr)}`);
           }
-        } else {
-          rejected++;
+        } finally {
+          setRefProgress(null);
         }
       }
       if (newImgs.length) setReferenceImgs((prev) => [...prev, ...newImgs]);
       if (newFiles.length) setReferenceFiles((prev) => [...prev, ...newFiles]);
       const total = newImgs.length + newFiles.length;
       if (total > 0) addToast(`${total} referencia${total > 1 ? 's' : ''} lista${total > 1 ? 's' : ''}.`, 'success');
-      if (rejected > 0) addToast(`${rejected} archivo(s) se omitieron (usa imágenes, PDF o Word).`, 'error');
+      problems.forEach((msg) => addToast(msg, 'error'));
     } catch (e2: unknown) {
       addToast("Error procesando las referencias: " + (e2 instanceof Error ? e2.message : ""), 'error');
     } finally {
+      setRefProgress(null);
       setLoading(false);
     }
   };
@@ -1102,32 +1123,14 @@ export default function GanaPlayMainApp() {
     let usedFallback = false;
     let storageErrorMsg: string | null = null;
 
-    // ── Intento 1: Firebase Storage con timeout corto ────────────────
+    // ── Intento 1: Firebase Storage (subida por trozos, con progreso) ──
+    // La ruta lleva fecha + aleatorio para que dos archivos con el MISMO
+    // nombre no se sobrescriban entre sí.
     try {
-      // Ruta única (fecha + aleatorio): evita que dos archivos con el MISMO
-      // nombre se sobrescriban entre sí en Storage.
-      const storageRef = ref(storage, `creatives/${reqSnapshot.id}/${Date.now()}_${Math.random().toString(36).slice(2, 7)}_${safeName}`);
-      const snapshot = await Promise.race([
-        uploadBytes(storageRef, file),
-        new Promise<never>((_, reject) => setTimeout(
-          () => reject(new Error("storage/timeout: la subida tardó más de 25 s.")), 25000)),
-      ]);
-      downloadURL = await getDownloadURL(snapshot.ref);
+      downloadURL = await uploadToStorage(`creatives/${reqSnapshot.id}`, file);
     } catch (err: unknown) {
-      const code = (err && typeof err === 'object' && 'code' in err) ? String((err as { code: string }).code) : '';
-      const rawMsg = err instanceof Error ? err.message : 'error desconocido';
-      console.warn(`[uploadDeliverable] Storage falló para ${safeName}:`, code || rawMsg, err);
-      if (code === 'storage/unauthorized' || rawMsg.includes('storage/timeout') ||
-          code === 'storage/unknown' || code === 'storage/retry-limit-exceeded' ||
-          code === 'storage/quota-exceeded' || code === 'storage/canceled') {
-        storageErrorMsg = code === 'storage/unauthorized'
-          ? 'Storage rechazó la subida (reglas o bucket inactivo).'
-          : (code === 'storage/timeout' || rawMsg.includes('storage/timeout'))
-          ? 'Storage tardó más de 25 s. Probable bucket inactivo o sin red.'
-          : `Storage no disponible (${code || rawMsg}).`;
-      } else {
-        storageErrorMsg = rawMsg;
-      }
+      console.warn(`[uploadDeliverable] Storage falló para ${safeName}:`, err);
+      storageErrorMsg = storageErrorMessage(err);
     }
 
     // ── Intento 2: fallback a data URL en Firestore (solo imágenes) ──
@@ -2997,9 +3000,11 @@ export default function GanaPlayMainApp() {
                   <UploadCloud size={36} color="var(--accent-color)" />
                   <div style={{ textAlign: 'center' }}>
                     <div style={{ fontWeight: 700, color: 'var(--text-primary)', marginBottom: '4px' }}>
-                      {(referenceImgs.length + referenceFiles.length) > 0 ? 'Añadir más referencias' : 'Sube referencias'}
+                      {refProgress || ((referenceImgs.length + referenceFiles.length) > 0 ? 'Añadir más referencias' : 'Sube referencias')}
                     </div>
-                    <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>Imágenes (JPG, PNG, GIF) · o documentos <strong>PDF</strong> y <strong>Word</strong></div>
+                    <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
+                      Imágenes (JPG, PNG, GIF) · o documentos <strong>PDF</strong> y <strong>Word</strong> · hasta {Math.round(MAX_REF_DOC_BYTES / 1024 / 1024)} MB
+                    </div>
                   </div>
                   <input type="file" accept="image/*,.pdf,.doc,.docx,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document" multiple style={{ display: 'none' }} onChange={handleRefUpload} />
                 </label>
