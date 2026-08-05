@@ -3322,7 +3322,12 @@ export default function GanaPlayMainApp() {
                         </div>
                         <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
                           {selectedReq.referenceFiles.map((f, i) => (
-                            <a key={i} href={f.url} target="_blank" rel="noreferrer" download={f.name}
+                            // Los documentos en Storage se piden por el proxy: fuerza la
+                            // descarga con su nombre original (el de Storage va saneado)
+                            // y evita el CORS del bucket.
+                            <a key={i}
+                              href={f.url.startsWith('data:') ? f.url : `/api/download?url=${encodeURIComponent(f.url)}&name=${encodeURIComponent(f.name)}`}
+                              target="_blank" rel="noreferrer" download={f.name}
                               style={{ display: 'flex', alignItems: 'center', gap: '8px', background: 'var(--surface-1)', border: '1px solid var(--border-color)', borderRadius: '10px', padding: '9px 12px', textDecoration: 'none' }}>
                               <FileText size={16} color={f.type === 'pdf' ? 'var(--danger)' : 'var(--info)'} />
                               <span style={{ flex: 1, fontSize: '13px', color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{f.name}</span>

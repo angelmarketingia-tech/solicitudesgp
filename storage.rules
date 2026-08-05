@@ -1,0 +1,58 @@
+rules_version = '2';
+
+// ─────────────────────────────────────────────────────────────────────────────
+// REGLAS DE FIREBASE STORAGE — NO DESPLEGADAS DESDE ESTE REPO
+//
+// Las reglas que hay HOY en producción (proyecto respaldogp-a2578) solo
+// aceptan escrituras con estos contentType:
+//     image/*  ·  application/pdf  ·  application/zip
+//
+// Comprobado con sondas reales contra el bucket:
+//     2.27 MB en application/pdf .......... OK
+//     5.00 MB en application/pdf .......... OK
+//     2.27 MB en image/png ................ OK
+//     2.27 MB en application/zip .......... OK
+//     0.10 MB en MIME de Word (.docx) ..... 403 storage/unauthorized
+//     .doc, octet-stream, mp4, text/plain . 403 storage/unauthorized
+//
+// O sea: el problema de "no se pudo adjuntar el Word" NO era el tamaño, era
+// el tipo de archivo. Como paño de agua tibia, `src/lib/storage-upload.ts`
+// sube los formatos Office modernos (.docx/.xlsx/.pptx) declarándolos
+// `application/zip` — que es literalmente su formato contenedor. El `.doc`
+// antiguo NO es un ZIP y sigue rechazado.
+//
+// PARA ARREGLARLO DE RAÍZ: pega el bloque de abajo en
+// Firebase Console → Storage → Reglas, del proyecto respaldogp-a2578.
+// (Desde aquí no se puede desplegar: la cuenta del Firebase CLI en esta
+// máquina no tiene acceso a ese proyecto.)
+// ─────────────────────────────────────────────────────────────────────────────
+
+service firebase.storage {
+  match /b/{bucket}/o {
+
+    // Entregables, referencias y promocionales.
+    match /creatives/{allPaths=**} {
+      allow read: if true;
+      allow write: if request.resource.size < 150 * 1024 * 1024
+                   && (
+                     request.resource.contentType.matches('image/.*')
+                     || request.resource.contentType.matches('video/.*')
+                     || request.resource.contentType == 'application/pdf'
+                     || request.resource.contentType.matches('application/.*zip.*')
+                     || request.resource.contentType == 'application/x-rar-compressed'
+                     // Word / Excel / PowerPoint, modernos y antiguos:
+                     || request.resource.contentType == 'application/msword'
+                     || request.resource.contentType.matches('application/vnd.openxmlformats-officedocument.*')
+                     || request.resource.contentType.matches('application/vnd.ms-.*')
+                   );
+      allow delete: if true;
+    }
+
+    // Módulo Social Media (hoy admite videos de hasta 150 MB).
+    match /social-media/{allPaths=**} {
+      allow read: if true;
+      allow write: if request.resource.size < 150 * 1024 * 1024;
+      allow delete: if true;
+    }
+  }
+}

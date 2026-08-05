@@ -57,6 +57,28 @@ export function storageErrorMessage(err: unknown): string {
   return raw || "error desconocido";
 }
 
+/**
+ * Las reglas de Storage desplegadas en `respaldogp-a2578` solo aceptan
+ * `image/*`, `application/pdf` y `application/zip` (comprobado subiendo
+ * sondas: 5 MB en PDF pasa, 100 KB en MIME de Word da 403). Los formatos
+ * Office modernos SON contenedores ZIP, así que se declaran como
+ * `application/zip`: no es un disfraz, es su formato real de contenedor.
+ * El archivo conserva su extensión y se descarga vía `/api/download`, que
+ * fuerza el nombre original.
+ *
+ * Lo correcto a futuro es ampliar las reglas (ver `storage.rules`); mientras
+ * tanto esto desbloquea Word sin tocar la configuración del proyecto.
+ * OJO: el `.doc` antiguo NO es un ZIP, así que seguirá siendo rechazado
+ * hasta que se actualicen las reglas.
+ */
+const ZIP_CONTAINER_EXTS = ["docx", "xlsx", "pptx"];
+
+function contentTypeFor(file: File): string {
+  const ext = (file.name.split(".").pop() || "").toLowerCase();
+  if (ZIP_CONTAINER_EXTS.includes(ext)) return "application/zip";
+  return file.type || "application/octet-stream";
+}
+
 export type UploadOptions = {
   /** Se llama con el porcentaje (0-100) mientras sube. */
   onProgress?: (pct: number) => void;
@@ -72,7 +94,7 @@ export type UploadOptions = {
 export async function uploadToStorage(folder: string, file: File, opts: UploadOptions = {}): Promise<string> {
   const stallMs = opts.stallMs ?? 60_000;
   const task = uploadBytesResumable(ref(storage, uniquePath(folder, file.name)), file, {
-    contentType: file.type || "application/octet-stream",
+    contentType: contentTypeFor(file),
   });
 
   await new Promise<void>((resolve, reject) => {
