@@ -297,6 +297,7 @@ export default function GanaPlayMainApp() {
   const [loginEmail, setLoginEmail] = useState(() => { try { return localStorage.getItem('gp_email') || ''; } catch { return ''; } });
   const [rememberMe, setRememberMe] = useState(() => { try { return localStorage.getItem('gp_remember') !== '0'; } catch { return true; } });
   const [loginRole, setLoginRole] = useState<"admin" | "cm" | "designer" | "operator" | "administrative" | null>(null);
+  const [loginDesignerName, setLoginDesignerName] = useState("");
   const [loginOperatorName, setLoginOperatorName] = useState("");
   const [loginAdministrativeName, setLoginAdministrativeName] = useState("");
 
@@ -1737,17 +1738,13 @@ export default function GanaPlayMainApp() {
       body = { email: loginEmail.trim(), password: loginPass };
     } else {
       if (!loginRole) return;
-      // Diseño ya no está en este menú: entra por correo corporativo.
-      if (loginRole === "designer") {
-        setLoginError("El equipo de Diseño entra con su correo corporativo.");
-        return;
-      }
+      if (loginRole === "designer" && !loginDesignerName) { setLoginError("Selecciona tu nombre."); return; }
       if (loginRole === "operator" && !loginOperatorName) { setLoginError("Selecciona tu nombre."); return; }
       if (loginRole === "administrative" && !loginAdministrativeName) { setLoginError("Selecciona tu nombre."); return; }
       if (!loginPass) { setLoginError("Ingresa la contraseña."); return; }
       body = {
         role: loginRole, password: loginPass,
-        operatorName: loginOperatorName, administrativeName: loginAdministrativeName,
+        designerName: loginDesignerName, operatorName: loginOperatorName, administrativeName: loginAdministrativeName,
       };
     }
     setLoginLoading(true);
@@ -1792,11 +1789,11 @@ export default function GanaPlayMainApp() {
     } finally {
       setLoginLoading(false);
     }
-  }, [loginMode, loginEmail, loginRole, loginPass, loginOperatorName, loginAdministrativeName, rememberMe]);
+  }, [loginMode, loginEmail, loginRole, loginPass, loginDesignerName, loginOperatorName, loginAdministrativeName, rememberMe]);
 
   const handleLogout = () => {
     setRole(null); setUserName(""); setLoginPass("");
-    setLoginOperatorName(""); setLoginAdministrativeName("");
+    setLoginDesignerName(""); setLoginOperatorName(""); setLoginAdministrativeName("");
     setLoginError(""); setLoginRole(null); setActiveTab('Tablero Kanban');
     setNotifPanelOpen(false);
     try {
@@ -1859,10 +1856,10 @@ export default function GanaPlayMainApp() {
       { key: 'cm',             icon: '🌐', label: 'Community Manager',  sub: 'Redes y contenido' },
       { key: 'operator',       icon: '👤', label: 'Operador',           sub: 'Quota · Juan' },
       { key: 'administrative', icon: '💼', label: 'DIRECTIVOS',         sub: 'Andres · Sebastian · Roberto' },
-      // El equipo de Diseño NO aparece aquí a propósito: entra con su correo
-      // corporativo (arriba) y con su propia contraseña. Cuando estaba en este
-      // menú, cualquiera con la contraseña general podía elegir "Diseñador" y
-      // ver el Centro de Diseño, la IA y los comentarios internos.
+      // Diseño sigue en el menú: quitarlo obligaba a todo el equipo a cambiar
+      // su forma de entrar. Lo que separa el acceso NO es esconder la tarjeta,
+      // es que este rol pide AUTH_PASS_DESIGNER, distinta de la general.
+      { key: 'designer',       icon: '✦',  label: 'Diseñador',          sub: 'Equipo creativo' },
     ];
     const selectedCard = ROLE_CARDS.find(c => c.key === loginRole);
     return (
@@ -1938,7 +1935,7 @@ export default function GanaPlayMainApp() {
                     const active = loginRole === card.key;
                     return (
                       <div key={card.key}
-                        onClick={() => { setLoginRole(card.key as "admin" | "cm" | "designer" | "operator" | "administrative"); setLoginPass(''); setLoginOperatorName(''); setLoginAdministrativeName(''); setLoginError(''); }}
+                        onClick={() => { setLoginRole(card.key as "admin" | "cm" | "designer" | "operator" | "administrative"); setLoginPass(''); setLoginDesignerName(''); setLoginOperatorName(''); setLoginAdministrativeName(''); setLoginError(''); }}
                         style={{
                           background: active ? 'var(--accent-soft)' : 'var(--panel-bg)',
                           border: `1.5px solid ${active ? 'var(--accent-color)' : 'var(--border-color)'}`,
@@ -1965,6 +1962,16 @@ export default function GanaPlayMainApp() {
                       <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Acceso con contraseña</div>
                     </div>
                   </div>
+
+                  {loginRole === 'designer' && (
+                    <div style={{ marginBottom: '14px' }}>
+                      <label className="label">Tu nombre</label>
+                      <select value={loginDesignerName} onChange={e => setLoginDesignerName(e.target.value)}>
+                        <option value="">— Selecciona tu nombre —</option>
+                        {DESIGNER_USERS.map(u => <option key={u} value={u}>{u}</option>)}
+                      </select>
+                    </div>
+                  )}
 
                   {loginRole === 'operator' && (
                     <div style={{ marginBottom: '14px' }}>

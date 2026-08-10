@@ -23,14 +23,19 @@ async function loginConCorreo(page: Page, email: string, pass: string) {
 }
 
 test.describe("Separación de roles", () => {
-  test("el acceso por rol ya no ofrece Diseñador", async ({ page }) => {
+  test("el menú de roles sigue ofreciendo los cinco perfiles", async ({ page }) => {
+    // Diseño debe seguir aquí: quitarlo rompía la forma de entrar del equipo.
+    // La separación la da la contraseña, no esconder la tarjeta.
     await page.goto("/");
     await page.getByRole("button", { name: /Acceso por rol/i }).click();
-    await expect(page.getByText("Trafficker")).toBeVisible();
-    await expect(page.getByText("Community Manager")).toBeVisible();
-    await expect(page.getByText("Operador")).toBeVisible();
-    // El que importa: Diseñador desapareció del menú.
-    await expect(page.getByText("Diseñador", { exact: true })).toHaveCount(0);
+    for (const perfil of ["Trafficker", "Community Manager", "Operador", "DIRECTIVOS", "Diseñador"]) {
+      await expect(page.getByText(perfil, { exact: true })).toBeVisible();
+    }
+    // Y al elegir Diseñador se puede escoger el nombre, como siempre.
+    await page.getByText("Diseñador", { exact: true }).click();
+    const selector = page.getByRole("combobox");
+    await expect(selector).toBeVisible();
+    await expect(selector.locator("option")).toContainText(["", "Juan David", "Eliana", "Verónica", "Caleb"]);
   });
 
   test("la contraseña general NO abre una cuenta de diseñador", async ({ page }) => {
@@ -38,6 +43,30 @@ test.describe("Separación de roles", () => {
     await loginConCorreo(page, DESIGNER_EMAIL, GENERAL_PASS);
     await expect(page.getByText(/Correo o contraseña incorrectos/i)).toBeVisible({ timeout: 15_000 });
     await expect(page.getByRole("heading", { name: /Solicitudes de diseño/i })).toHaveCount(0);
+  });
+
+  test("el diseñador entra por el menú de roles, como siempre", async ({ page }) => {
+    test.skip(!DESIGNER_PASS, "Falta E2E_DESIGNER_PASS");
+    await page.goto("/");
+    await page.getByRole("button", { name: /Acceso por rol/i }).click();
+    await page.getByText("Diseñador", { exact: true }).click();
+    await page.getByRole("combobox").selectOption("Juan David");
+    await page.getByPlaceholder("••••••••••••").fill(DESIGNER_PASS);
+    await page.getByRole("button", { name: /Acceder al sistema/i }).click();
+    await expect(page.getByRole("heading", { name: /Solicitudes de diseño/i })).toBeVisible({ timeout: 20_000 });
+    await expect(page.getByText("Centro de Diseño")).toBeVisible();
+  });
+
+  test("Quota NO entra como diseñador con su contraseña", async ({ page }) => {
+    test.skip(!GENERAL_PASS, "Falta E2E_GENERAL_PASS");
+    await page.goto("/");
+    await page.getByRole("button", { name: /Acceso por rol/i }).click();
+    await page.getByText("Diseñador", { exact: true }).click();
+    await page.getByRole("combobox").selectOption("Juan David");
+    await page.getByPlaceholder("••••••••••••").fill(GENERAL_PASS);
+    await page.getByRole("button", { name: /Acceder al sistema/i }).click();
+    await expect(page.getByText(/Contraseña incorrecta/i)).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByText("Centro de Diseño")).toHaveCount(0);
   });
 
   test("el diseñador entra con su correo y su propia contraseña", async ({ page }) => {
