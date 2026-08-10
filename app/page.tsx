@@ -104,6 +104,23 @@ const DIMENSION_OPTIONS = [
 // Formato sugerido por defecto para piezas de redes sociales.
 const DEFAULT_SOCIAL_DIMENSION = "IG Feed vertical";
 
+/**
+ * ¿Esta solicitud la levantó el Trafficker?
+ *
+ * El campo `requesterName` es texto libre y en los datos reales aparece de
+ * mil formas: "Trafficker", "TRAFFICKER", "Traffficker", "TRAFFCIKER",
+ * "Angel", "ANGEL", "angel", "Angel "… Por eso se normaliza (sin acentos,
+ * minúsculas, sin espacios) y se aceptan las variantes mal escritas, en vez
+ * de comparar con una cadena exacta que dejaría pasar la mitad.
+ */
+function esSolicitudDelTrafficker(req: { requesterName?: string }): boolean {
+  const n = (req.requesterName || "")
+    .normalize("NFD").replace(/[̀-ͯ]/g, "")
+    .toLowerCase().replace(/\s+/g, "");
+  if (!n) return false;
+  return n.startsWith("traf") || n.startsWith("tarf") || n.includes("angel");
+}
+
 // Preselección por perfil: área y nombre del solicitante.
 const PROFILE_DEFAULTS: Record<string, { area: string; requesterName: string }> = {
   admin:          { area: "Pauta",          requesterName: "Trafficker" },
@@ -290,6 +307,14 @@ export default function GanaPlayMainApp() {
   }, []);
 
   const [requests, setRequests] = useState<RequestType[]>([]);
+  // `requests` es SIEMPRE la lista completa: de ahí sale el número de la
+  // siguiente solicitud, y filtrarla provocaría IDs repetidos.
+  // `visibles` es lo que ve cada perfil. El Operador (Quota, Juan) no ve las
+  // solicitudes levantadas por el Trafficker.
+  const visibles = useMemo(
+    () => (role === 'operator' ? requests.filter(r => !esSolicitudDelTrafficker(r)) : requests),
+    [requests, role],
+  );
   const [loadingData, setLoadingData] = useState(true);
 
   // ── Login ──
@@ -1882,7 +1907,7 @@ export default function GanaPlayMainApp() {
     const today = new Date().toISOString().split('T')[0];
     const tomorrow = new Date(Date.now() + 86400000).toISOString().split('T')[0];
     const alerts: NotificationItem[] = [];
-    requests.forEach(req => {
+    visibles.forEach(req => {
       if (req.status === 'Publicado' || req.status === 'Denegado' || !req.deliveryDate) return;
       const push = (suffix: string, type: NotificationItem['type'], title: string, message: string) => {
         (['admin', 'designer'] as const).forEach(tr => {
@@ -1898,13 +1923,19 @@ export default function GanaPlayMainApp() {
       }
     });
     return alerts;
-  }, [requests]);
+  }, [visibles]);
 
   const allNotifications = useMemo<NotificationItem[]>(() => {
     const targetRoleForNotifs = (role === 'admin' || role === 'cm' || role === 'operator' || role === 'administrative') ? 'admin' : 'designer';
     const myAlerts = deadlineAlerts.filter(a => a.targetRole === targetRoleForNotifs);
-    return [...myAlerts, ...firestoreNotifs];
-  }, [deadlineAlerts, firestoreNotifs, role]);
+    // Las notificaciones traen el título de la solicitud en el mensaje: si no
+    // se filtran, el Operador leería por aquí justo lo que no debe ver.
+    const idsVisibles = new Set(visibles.map(r => r.id));
+    const notifsPermitidas = role === 'operator'
+      ? firestoreNotifs.filter(n => !n.requestId || idsVisibles.has(n.requestId))
+      : firestoreNotifs;
+    return [...myAlerts, ...notifsPermitidas];
+  }, [deadlineAlerts, firestoreNotifs, role, visibles]);
 
   const unreadCount = useMemo(() => allNotifications.filter(n => !n.read).length, [allNotifications]);
 
@@ -2139,9 +2170,9 @@ export default function GanaPlayMainApp() {
           {(role === 'admin' || role === 'cm' || role === 'operator' || role === 'administrative') && (
             <div style={{ ...navItemStyle(activeTab === 'Pendientes'), position: 'relative' }} onClick={() => setActiveTab('Pendientes')}>
               <AlertCircle size={15} /> Pendientes
-              {requests.filter(r => r.status === 'Pendiente').length > 0 && (
+              {visibles.filter(r => r.status === 'Pendiente').length > 0 && (
                 <span style={{ position: 'absolute', top: '-5px', right: '-5px', background: 'var(--warning)', color: '#fff', borderRadius: '50%', width: '16px', height: '16px', fontSize: '9px', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 700 }}>
-                  {requests.filter(r => r.status === 'Pendiente').length}
+                  {visibles.filter(r => r.status === 'Pendiente').length}
                 </span>
               )}
             </div>
@@ -2151,7 +2182,9 @@ export default function GanaPlayMainApp() {
           )}
           <div style={navItemStyle(activeTab === 'Historial')} onClick={() => setActiveTab('Historial')}><Clock size={15} /> Historial</div>
           <div style={navItemStyle(activeTab === 'Tabla Principal')} onClick={() => setActiveTab('Tabla Principal')}><List size={15} /> Tabla</div>
-          <div style={navItemStyle(activeTab === 'Redes Sociales')} onClick={() => setActiveTab('Redes Sociales')}><CalendarDays size={15} /> Redes Sociales</div>
+          {role !== 'operator' && (
+            <div style={navItemStyle(activeTab === 'Redes Sociales')} onClick={() => setActiveTab('Redes Sociales')}><CalendarDays size={15} /> Redes Sociales</div>
+          )}
           <div style={navItemStyle(activeTab === 'Promocionales')} onClick={() => setActiveTab('Promocionales')}><Megaphone size={15} /> Promocionales</div>
           {(role === 'admin' || role === 'cm') && (
             <div style={navItemStyle(activeTab === 'Contenido Influencers')} onClick={() => setActiveTab('Contenido Influencers')}><Users size={15} /> Contenido Influencers</div>
@@ -2159,7 +2192,7 @@ export default function GanaPlayMainApp() {
         </div>
 
         {/* ESTADO DE CARGA */}
-        {loadingData && requests.length === 0 && (
+        {loadingData && visibles.length === 0 && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
             {[1, 2, 3, 4].map(i => <div key={i} className="skeleton" style={{ height: '64px' }} />)}
           </div>
@@ -2175,7 +2208,7 @@ export default function GanaPlayMainApp() {
               { id: 'En Proceso', title: 'En proceso' },
               { id: 'Publicado', title: 'Publicado' },
             ].map(col => {
-              const colCards = requests.filter(req => req.status === col.id);
+              const colCards = visibles.filter(req => req.status === col.id);
               const colColor = STATUS_TEXT_COLORS[col.id];
               return (
                 <div key={col.id} style={{ minWidth: '300px', width: '300px', background: 'var(--surface-1)', borderRadius: '14px', padding: '14px', border: '1px solid var(--border-color)', display: 'flex', flexDirection: 'column', gap: '12px' }}>
@@ -2213,7 +2246,7 @@ export default function GanaPlayMainApp() {
 
         {/* ─── VISTA: PENDIENTES ─── */}
         {activeTab === 'Pendientes' && (() => {
-          const pendingRequests = requests.filter(r => r.status === 'Pendiente');
+          const pendingRequests = visibles.filter(r => r.status === 'Pendiente');
           return (
             <div>
               <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '18px' }}>
@@ -2268,7 +2301,7 @@ export default function GanaPlayMainApp() {
                 ))}
               </div>
               {(['Pendiente', 'Planeando', 'En Proceso', 'Publicado', 'Denegado'] as RequestStatus[]).map(status => {
-                const rowCards = days.map((d) => ({ day: d, cards: requests.filter(r => r.deliveryDate === d.dateStr && r.status === status) }));
+                const rowCards = days.map((d) => ({ day: d, cards: visibles.filter(r => r.deliveryDate === d.dateStr && r.status === status) }));
                 const hasAny = rowCards.some(x => x.cards.length > 0);
                 if (!hasAny) return null;
                 return (
@@ -2302,7 +2335,7 @@ export default function GanaPlayMainApp() {
                   </div>
                 );
               })}
-              {days.every((d) => requests.filter(r => r.deliveryDate === d.dateStr).length === 0) && (
+              {days.every((d) => visibles.filter(r => r.deliveryDate === d.dateStr).length === 0) && (
                 <div style={{ padding: '24px', textAlign: 'center', color: 'var(--text-secondary)', fontSize: '13px', borderTop: '1px solid var(--border-color)' }}>Sin solicitudes esta semana</div>
               )}
             </div>
@@ -2503,7 +2536,7 @@ export default function GanaPlayMainApp() {
 
         {/* ─── VISTA: HISTORIAL ─── */}
         {activeTab === 'Historial' && (() => {
-          const filtered = requests.filter(r => {
+          const filtered = visibles.filter(r => {
             const matchSearch = searchQuery === '' || r.id.toLowerCase().includes(searchQuery.toLowerCase()) || r.title.toLowerCase().includes(searchQuery.toLowerCase());
             const matchStatus = statusFilter === 'Todos' || r.status === statusFilter;
             const matchKind = kindFilter === 'Todos' || r.requestKind === kindFilter;
@@ -2523,7 +2556,7 @@ export default function GanaPlayMainApp() {
                 </select>
                 <select value={kindFilter} onChange={e => setKindFilter(e.target.value as RequestKind | "Todos")} style={{ width: 'auto', minWidth: '180px' }}>
                   <option value="Todos">Todos los tipos</option>
-                  {REQUEST_KINDS.map(k => <option key={k.id} value={k.id}>{k.emoji} {k.label} ({requests.filter(r => r.requestKind === k.id).length})</option>)}
+                  {REQUEST_KINDS.map(k => <option key={k.id} value={k.id}>{k.emoji} {k.label} ({visibles.filter(r => r.requestKind === k.id).length})</option>)}
                 </select>
                 <span style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>{filtered.length} resultado{filtered.length !== 1 ? 's' : ''}</span>
               </div>
@@ -2625,7 +2658,7 @@ export default function GanaPlayMainApp() {
           return (
             <div>
               {tableGroups.map(group => {
-                const groupRows = requests.filter(r => group.statuses.includes(r.status));
+                const groupRows = visibles.filter(r => group.statuses.includes(r.status));
                 return (
                   <div key={group.name} style={{ marginBottom: '24px' }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '4px 0 8px' }}>
@@ -2710,7 +2743,10 @@ export default function GanaPlayMainApp() {
         })()}
 
         {/* ─── VISTA: REDES SOCIALES (calendario + carpetas + videos) ─── */}
-        {activeTab === 'Redes Sociales' && (
+        {/* La pestaña se oculta arriba, pero `activeTab` se recuerda entre
+            sesiones: sin esta guarda, un Operador que la tuviera abierta la
+            seguiría viendo al volver a entrar. */}
+        {activeTab === 'Redes Sociales' && role !== 'operator' && (
           <SocialMediaTab role={role} userName={userName} addToast={addToast} />
         )}
 
@@ -2834,7 +2870,7 @@ export default function GanaPlayMainApp() {
                       style={{ padding: '13px 18px', borderBottom: '1px solid var(--border-color)', background: n.read ? 'transparent' : 'var(--surface-1)', borderLeft: `3px solid ${n.read ? 'transparent' : dot}`, cursor: n.requestId ? 'pointer' : 'default' }}
                       onClick={() => {
                         if (n.requestId) {
-                          const req = requests.find(r => r.id === n.requestId);
+                          const req = visibles.find(r => r.id === n.requestId);
                           if (req) { setSelectedReq(req); setModalOpen(true); setNotifPanelOpen(false); }
                         }
                       }}>
