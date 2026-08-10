@@ -19,6 +19,7 @@ import {
 } from 'firebase/firestore';
 import { ref, deleteObject, listAll } from 'firebase/storage';
 import { emailForUser, DEFAULT_TRAFFICKER_EMAIL, DEFAULT_REQUESTER_EMAILS, SUGGESTED_REQUESTER_EMAILS } from '@/lib/users';
+import { entrarConPersonal, cambiarPassword, recuperarPassword, MIN_PASSWORD } from '@/lib/account';
 import { compressImageToDataUrl, validateImage } from '@/lib/image';
 import { uploadToStorage, storageErrorMessage } from '@/lib/storage-upload';
 import {
@@ -297,6 +298,13 @@ export default function GanaPlayMainApp() {
   const [loginEmail, setLoginEmail] = useState(() => { try { return localStorage.getItem('gp_email') || ''; } catch { return ''; } });
   const [rememberMe, setRememberMe] = useState(() => { try { return localStorage.getItem('gp_remember') !== '0'; } catch { return true; } });
   const [loginRole, setLoginRole] = useState<"admin" | "cm" | "designer" | "operator" | "administrative" | null>(null);
+  // Panel "Mi perfil": cambio de contraseña personal.
+  const [perfilOpen, setPerfilOpen] = useState(false);
+  const [passActual, setPassActual] = useState("");
+  const [passNueva, setPassNueva] = useState("");
+  const [passRepetir, setPassRepetir] = useState("");
+  const [passGuardando, setPassGuardando] = useState(false);
+  const [perfilMsg, setPerfilMsg] = useState<{ tipo: 'ok' | 'error'; texto: string } | null>(null);
   const [loginDesignerName, setLoginDesignerName] = useState("");
   const [loginOperatorName, setLoginOperatorName] = useState("");
   const [loginAdministrativeName, setLoginAdministrativeName] = useState("");
@@ -1735,7 +1743,19 @@ export default function GanaPlayMainApp() {
     if (loginMode === 'email') {
       if (!loginEmail.trim()) { setLoginError("Ingresa tu correo corporativo."); return; }
       if (!loginPass) { setLoginError("Ingresa tu contraseña."); return; }
-      body = { email: loginEmail.trim(), password: loginPass };
+      // 1º su contraseña PERSONAL (si ya la creó). Si no tiene, se sigue con la
+      // compartida de siempre: nadie se queda fuera durante la transición.
+      setLoginLoading(true);
+      const personal = await entrarConPersonal(loginEmail.trim(), loginPass);
+      setLoginLoading(false);
+      if (personal.ok && personal.idToken) {
+        body = { idToken: personal.idToken };
+      } else if (!personal.ok && personal.error !== 'sin-cuenta') {
+        setLoginError("❌ " + personal.error);
+        return;
+      } else {
+        body = { email: loginEmail.trim(), password: loginPass };
+      }
     } else {
       if (!loginRole) return;
       if (loginRole === "designer" && !loginDesignerName) { setLoginError("Selecciona tu nombre."); return; }
@@ -1771,6 +1791,9 @@ export default function GanaPlayMainApp() {
       try {
         sessionStorage.setItem("gp_role", data.role);
         sessionStorage.setItem("gp_userName", data.userName);
+        // El correo se guarda siempre en la sesión: lo necesita "Mi perfil"
+        // para saber de quién es la contraseña que se va a cambiar.
+        if (loginMode === 'email') sessionStorage.setItem("gp_email", loginEmail.trim());
         localStorage.removeItem("gp_role");
         localStorage.removeItem("gp_userName");
         if (rememberMe) {
@@ -1790,6 +1813,45 @@ export default function GanaPlayMainApp() {
       setLoginLoading(false);
     }
   }, [loginMode, loginEmail, loginRole, loginPass, loginDesignerName, loginOperatorName, loginAdministrativeName, rememberMe]);
+
+  // Correo de quien está usando la app: el que escribió al entrar, o el que le
+  // corresponde por nombre en el directorio (quien entró por el menú de roles).
+  const miCorreo = useMemo(() => {
+    let guardado = "";
+    try { guardado = sessionStorage.getItem("gp_email") || localStorage.getItem("gp_email") || ""; } catch { /* SSR */ }
+    return guardado || emailForUser(userName) || (role === 'admin' ? DEFAULT_TRAFFICKER_EMAIL : "");
+  }, [userName, role]);
+
+  /** Prueba una contraseña compartida contra el servidor (sin iniciar sesión). */
+  const validarCompartida = useCallback(async (correo: string, password: string): Promise<boolean> => {
+    try {
+      const res = await fetch("/api/auth", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: correo, password }),
+      });
+      const data = await res.json();
+      return Boolean(res.ok && data.ok);
+    } catch { return false; }
+  }, []);
+
+  const handleCambiarPassword = useCallback(async () => {
+    setPerfilMsg(null);
+    if (!passActual) { setPerfilMsg({ tipo: 'error', texto: "Escribe tu contraseña actual." }); return; }
+    if (passNueva !== passRepetir) { setPerfilMsg({ tipo: 'error', texto: "La nueva contraseña y su repetición no coinciden." }); return; }
+    setPassGuardando(true);
+    try {
+      const r = await cambiarPassword(miCorreo, passActual, passNueva, validarCompartida);
+      if (r.ok) {
+        setPerfilMsg({ tipo: 'ok', texto: "Listo. La próxima vez entra con tu correo y tu nueva contraseña." });
+        setPassActual(""); setPassNueva(""); setPassRepetir("");
+        addToast("Contraseña actualizada.", 'success');
+      } else {
+        setPerfilMsg({ tipo: 'error', texto: r.error });
+      }
+    } finally {
+      setPassGuardando(false);
+    }
+  }, [miCorreo, passActual, passNueva, passRepetir, validarCompartida, addToast]);
 
   const handleLogout = () => {
     setRole(null); setUserName(""); setLoginPass("");
@@ -1914,7 +1976,25 @@ export default function GanaPlayMainApp() {
                 {loginLoading ? 'Verificando…' : 'Iniciar sesión →'}
               </button>
 
-              <div style={{ textAlign: 'center', marginTop: '16px' }}>
+              <div style={{ textAlign: 'center', marginTop: '14px' }}>
+                <button
+                  onClick={async () => {
+                    setLoginError("");
+                    if (!loginEmail.trim()) { setLoginError("Escribe tu correo arriba y vuelve a pulsar aquí."); return; }
+                    setLoginLoading(true);
+                    const r = await recuperarPassword(loginEmail.trim());
+                    setLoginLoading(false);
+                    // Mismo mensaje exista o no la cuenta: no revelamos quién está dado de alta.
+                    setLoginError(r.ok
+                      ? `✉️ Si ${loginEmail.trim()} tiene contraseña personal, te llegó un correo para restablecerla.`
+                      : "❌ " + r.error);
+                  }}
+                  style={{ background: 'none', border: 'none', color: 'var(--text-muted)', fontSize: '12px', cursor: 'pointer', textDecoration: 'underline', width: 'auto', padding: 0 }}>
+                  Olvidé mi contraseña
+                </button>
+              </div>
+
+              <div style={{ textAlign: 'center', marginTop: '10px' }}>
                 <button onClick={() => { setLoginMode('role'); setLoginError(''); }}
                   style={{ background: 'none', border: 'none', color: 'var(--text-muted)', fontSize: '12px', cursor: 'pointer', textDecoration: 'underline', width: 'auto', padding: 0 }}>
                   Acceso por rol (equipo interno)
@@ -2059,6 +2139,11 @@ export default function GanaPlayMainApp() {
           <button title="Nueva solicitud" className="btn" style={{ padding: '9px 14px', fontSize: '13px' }}
             onClick={openCreateRequest}>
             <Plus size={16} /> Nueva
+          </button>
+          <button title="Mi perfil y contraseña" className="btn-ghost"
+            style={{ padding: '9px 12px', fontSize: '13px', borderRadius: '10px', cursor: 'pointer' }}
+            onClick={() => { setPerfilOpen(true); setPassActual(''); setPassNueva(''); setPassRepetir(''); setPerfilMsg(null); }}>
+            <User size={16} />
           </button>
           <button title="Notificaciones" className="btn-ghost"
             style={{ padding: '9px 12px', fontSize: '13px', position: 'relative', borderRadius: '10px', cursor: 'pointer' }}
@@ -3603,6 +3688,76 @@ export default function GanaPlayMainApp() {
                 </div>
               </div>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* MI PERFIL — cambio de contraseña personal */}
+      {perfilOpen && (
+        <div className="modal-overlay" onClick={() => setPerfilOpen(false)}
+          style={{ position: 'fixed', inset: 0, zIndex: 240, background: 'rgba(15,23,42,0.45)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '24px' }}>
+          <div className="card" onClick={e => e.stopPropagation()} style={{ width: '100%', maxWidth: '440px', padding: '24px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '18px' }}>
+              <h3 style={{ margin: 0, fontSize: '16px', display: 'flex', alignItems: 'center', gap: '8px', color: 'var(--text-primary)' }}>
+                <User size={17} color="var(--accent-color)" /> Mi perfil
+              </h3>
+              <X size={20} style={{ cursor: 'pointer', color: 'var(--text-secondary)' }} onClick={() => setPerfilOpen(false)} />
+            </div>
+
+            <div style={{ background: 'var(--surface-1)', border: '1px solid var(--border-color)', borderRadius: '10px', padding: '12px 14px', marginBottom: '18px' }}>
+              <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)' }}>{userName || 'Sin nombre'}</div>
+              <div style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>
+                {role === 'admin' ? 'Trafficker' : role === 'cm' ? 'Community Manager' : role === 'operator' ? 'Operador' : role === 'administrative' ? 'Directivo' : 'Diseñador'}
+              </div>
+              <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '4px', wordBreak: 'break-all' }}>{miCorreo || '— sin correo corporativo —'}</div>
+            </div>
+
+            {!miCorreo ? (
+              <p style={{ fontSize: '12.5px', color: 'var(--text-secondary)', lineHeight: 1.6, margin: 0 }}>
+                Tu perfil todavía no tiene un correo corporativo asignado, y la contraseña personal va ligada al correo.
+                Pídele al Trafficker que agregue el tuyo y podrás cambiarla desde aquí.
+              </p>
+            ) : (
+              <>
+                <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.6px', marginBottom: '10px' }}>
+                  Cambiar mi contraseña
+                </div>
+                <p style={{ fontSize: '12px', color: 'var(--text-muted)', margin: '0 0 14px', lineHeight: 1.55 }}>
+                  Si nunca la has cambiado, escribe la contraseña con la que entras hoy: se creará la tuya personal.
+                  Desde entonces entras con <strong>tu correo</strong> y esta contraseña.
+                </p>
+
+                <div className="form-group" style={{ marginBottom: '12px' }}>
+                  <label className="label">Contraseña actual</label>
+                  <input type="password" value={passActual} onChange={e => setPassActual(e.target.value)} placeholder="La que usas hoy" autoComplete="current-password" />
+                </div>
+                <div className="form-group" style={{ marginBottom: '12px' }}>
+                  <label className="label">Nueva contraseña (mínimo {MIN_PASSWORD} caracteres)</label>
+                  <input type="password" value={passNueva} onChange={e => setPassNueva(e.target.value)} autoComplete="new-password" />
+                </div>
+                <div className="form-group" style={{ marginBottom: '16px' }}>
+                  <label className="label">Repite la nueva contraseña</label>
+                  <input type="password" value={passRepetir} onChange={e => setPassRepetir(e.target.value)} autoComplete="new-password"
+                    onKeyDown={e => { if (e.key === 'Enter' && !passGuardando) handleCambiarPassword(); }} />
+                </div>
+
+                {perfilMsg && (
+                  <div style={{
+                    fontSize: '12.5px', lineHeight: 1.5, padding: '10px 12px', borderRadius: '9px', marginBottom: '14px',
+                    background: perfilMsg.tipo === 'ok' ? 'var(--accent-soft)' : '#fdecea',
+                    color: perfilMsg.tipo === 'ok' ? 'var(--accent-dark)' : 'var(--danger)',
+                    border: `1px solid ${perfilMsg.tipo === 'ok' ? 'var(--accent-color)' : 'var(--danger)'}`,
+                  }}>
+                    {perfilMsg.texto}
+                  </div>
+                )}
+
+                <button className="btn" style={{ width: '100%', padding: '11px', cursor: passGuardando ? 'wait' : 'pointer' }}
+                  disabled={passGuardando} onClick={handleCambiarPassword}>
+                  {passGuardando ? 'Guardando…' : 'Guardar contraseña'}
+                </button>
+              </>
+            )}
           </div>
         </div>
       )}

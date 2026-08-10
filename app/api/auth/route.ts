@@ -108,8 +108,35 @@ function buildDirectory(): Map<string, { role: Role; name: string }> {
 
 const DIRECTORY = buildDirectory();
 
+/**
+ * Verifica un idToken de Firebase Auth contra Google y devuelve el correo real
+ * del usuario. Sin esto, el cliente podría decir "soy fulano" y llevarse su rol.
+ * Se usa el endpoint público de Identity Toolkit porque el proyecto no tiene
+ * Admin SDK ni service account.
+ */
+async function emailDeIdToken(idToken: string): Promise<string | null> {
+  const key = process.env.NEXT_PUBLIC_FIREBASE_API_KEY;
+  if (!key) return null;
+  try {
+    const res = await fetch(`https://identitytoolkit.googleapis.com/v1/accounts:lookup?key=${key}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ idToken }),
+      cache: "no-store",
+    });
+    if (!res.ok) return null;
+    const data = (await res.json()) as { users?: { email?: string }[] };
+    return data.users?.[0]?.email?.toLowerCase().trim() || null;
+  } catch (e) {
+    console.error("[auth] no se pudo verificar el idToken:", e);
+    return null;
+  }
+}
+
 type AuthBody = {
-  // Nuevo: acceso corporativo por correo.
+  // Contraseña personal ya verificada por Firebase Auth: llega el idToken.
+  idToken?: string;
+  // Acceso corporativo por correo con la contraseña compartida.
   email?: string;
   // Compatibilidad: acceso por rol (método anterior, aún soportado).
   role?: Role;
@@ -145,9 +172,27 @@ export async function POST(req: Request) {
       );
     }
 
-    const { email, role, password, designerName, operatorName, administrativeName }: AuthBody = await req.json();
+    const { idToken, email, role, password, designerName, operatorName, administrativeName }: AuthBody = await req.json();
 
-    // ── Acceso corporativo por correo (método preferido) ──
+    // ── Acceso con contraseña PERSONAL (Firebase Auth ya la validó) ──
+    // El rol nunca viene del cliente: se resuelve aquí desde el correo que
+    // Google confirma que es dueño de ese token.
+    if (idToken) {
+      const correo = await emailDeIdToken(idToken);
+      if (!correo) {
+        return NextResponse.json({ ok: false, error: "Sesión no válida. Vuelve a intentar." }, { status: 401 });
+      }
+      const entry = DIRECTORY.get(correo);
+      if (!entry) {
+        return NextResponse.json(
+          { ok: false, error: "Tu correo no está dado de alta en el sistema. Pídeselo al Trafficker." },
+          { status: 403 }
+        );
+      }
+      return NextResponse.json({ ok: true, role: entry.role, userName: entry.name });
+    }
+
+    // ── Acceso corporativo por correo con la contraseña compartida ──
     if (email) {
       if (!password) {
         return NextResponse.json({ ok: false, error: "Ingresa tu contraseña." }, { status: 400 });

@@ -1,6 +1,7 @@
 import { initializeApp } from "firebase/app";
 import { getFirestore } from "firebase/firestore";
 import { getStorage } from "firebase/storage";
+import { getAuth } from "firebase/auth";
 
 const firebaseConfig = {
   apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY,
@@ -13,6 +14,10 @@ const firebaseConfig = {
 
 const app = initializeApp(firebaseConfig);
 export const db = getFirestore(app);
+// Firebase Authentication: se usa SOLO para que cada persona tenga su propia
+// contraseña (crearla, cambiarla y recuperarla). El rol NO sale de aquí: lo
+// sigue resolviendo el servidor a partir del correo, en /api/auth.
+export const auth = getAuth(app);
 // Pasar el bucket explícitamente con gs:// para evitar "No default bucket found"
 const bucketUrl = `gs://${process.env.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET || 'respaldogp-a2578.firebasestorage.app'}`;
 export const storage = getStorage(app, bucketUrl);
