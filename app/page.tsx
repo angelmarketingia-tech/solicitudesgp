@@ -7,7 +7,8 @@ import {
   ChevronRight, CalendarDays, Maximize2, X,
   CheckCircle2, Clock,
   LogOut, AlertCircle, UploadCloud, Bot, Send, Trash2,
-  Download, Bell, Sparkles, Target, Building2, ClipboardList, AtSign, Users, Megaphone, Pencil
+  Download, Bell, Sparkles, Target, Building2, ClipboardList, AtSign, Users, Megaphone, Pencil,
+  Play
 } from 'lucide-react';
 
 // ─── Firebase ───
@@ -20,6 +21,10 @@ import { ref, deleteObject, listAll } from 'firebase/storage';
 import { emailForUser, DEFAULT_TRAFFICKER_EMAIL, DEFAULT_REQUESTER_EMAILS, SUGGESTED_REQUESTER_EMAILS } from '@/lib/users';
 import { compressImageToDataUrl, validateImage } from '@/lib/image';
 import { uploadToStorage, storageErrorMessage } from '@/lib/storage-upload';
+import {
+  mediaKindOf, maxBytesFor, formatMB,
+  DELIVERABLE_EXTS, DELIVERABLE_ACCEPT, MAX_FILE_BYTES, MAX_VIDEO_BYTES,
+} from '@/lib/media';
 import SocialMediaTab from './SocialMediaTab';
 import InfluencerModule from './InfluencerModule';
 import PromoModule from './PromoModule';
@@ -292,7 +297,6 @@ export default function GanaPlayMainApp() {
   const [loginEmail, setLoginEmail] = useState(() => { try { return localStorage.getItem('gp_email') || ''; } catch { return ''; } });
   const [rememberMe, setRememberMe] = useState(() => { try { return localStorage.getItem('gp_remember') !== '0'; } catch { return true; } });
   const [loginRole, setLoginRole] = useState<"admin" | "cm" | "designer" | "operator" | "administrative" | null>(null);
-  const [loginDesignerName, setLoginDesignerName] = useState("");
   const [loginOperatorName, setLoginOperatorName] = useState("");
   const [loginAdministrativeName, setLoginAdministrativeName] = useState("");
 
@@ -1103,17 +1107,21 @@ export default function GanaPlayMainApp() {
     file: File,
     reqSnapshot: RequestType,
   ): Promise<RequestType | null> => {
-    const allowed = ['jpg', 'jpeg', 'png', 'webp', 'pdf', 'zip'];
     const ext = (file.name.split('.').pop() || '').toLowerCase();
-    if (!allowed.includes(ext)) {
-      addToast(`"${file.name}": formato no permitido (usa ${allowed.join(', ')}).`, 'error');
+    if (!DELIVERABLE_EXTS.includes(ext)) {
+      addToast(`"${file.name}": formato no permitido (usa ${DELIVERABLE_EXTS.join(', ')}).`, 'error');
       return null;
     }
-    if (file.size > 25 * 1024 * 1024) {
-      addToast(`"${file.name}" supera el límite de 25 MB.`, 'error');
+    const kind = mediaKindOf(file.name);
+    if (file.size > maxBytesFor(kind)) {
+      addToast(`"${file.name}" supera el límite de ${formatMB(maxBytesFor(kind))}.`, 'error');
       return null;
     }
-    const isImage = ['jpg', 'jpeg', 'png', 'webp'].includes(ext);
+    // Solo las imágenes ESTÁTICAS se pueden comprimir a data URL: pasar un GIF
+    // animado por canvas lo dejaría en un solo fotograma.
+    const isImage = kind === 'image';
+    // El GIF sí se puede evaluar con la IA (analiza el primer fotograma).
+    const analizable = kind === 'image' || kind === 'animated';
     const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_');
     const type = file.name;
 
@@ -1146,11 +1154,12 @@ export default function GanaPlayMainApp() {
     }
 
     if (!downloadURL) {
-      addToast(
-        `No se pudo subir "${file.name}". ${storageErrorMsg || ''} ` +
-        (isImage ? '' : 'Para PDF/ZIP es necesario activar Firebase Storage.'),
-        'error'
-      );
+      // Las reglas de Storage desplegadas rechazan video/* (ver storage.rules):
+      // el mensaje genérico haría perder el tiempo buscando en el lado equivocado.
+      const pista = kind === 'video'
+        ? 'Los VIDEOS están bloqueados por las reglas de Storage del proyecto: hay que ampliarlas en Firebase Console (ver storage.rules).'
+        : '';
+      addToast(`No se pudo subir "${file.name}". ${storageErrorMsg || ''} ${pista}`.trim(), 'error');
       return null;
     }
 
@@ -1214,7 +1223,7 @@ export default function GanaPlayMainApp() {
           deliveryDate: reqSnapshot.deliveryDate || "",
         });
       }
-      if (isImage) {
+      if (analizable) {
         void analyzeCreativeInBackground(reqSnapshot.id, newCreative.id!, type, file,
           { copy: reqSnapshot.copy, format: reqSnapshot.format, countries: reqSnapshot.countries });
       }
@@ -1728,13 +1737,17 @@ export default function GanaPlayMainApp() {
       body = { email: loginEmail.trim(), password: loginPass };
     } else {
       if (!loginRole) return;
-      if (loginRole === "designer" && !loginDesignerName) { setLoginError("Selecciona tu nombre."); return; }
+      // Diseño ya no está en este menú: entra por correo corporativo.
+      if (loginRole === "designer") {
+        setLoginError("El equipo de Diseño entra con su correo corporativo.");
+        return;
+      }
       if (loginRole === "operator" && !loginOperatorName) { setLoginError("Selecciona tu nombre."); return; }
       if (loginRole === "administrative" && !loginAdministrativeName) { setLoginError("Selecciona tu nombre."); return; }
       if (!loginPass) { setLoginError("Ingresa la contraseña."); return; }
       body = {
         role: loginRole, password: loginPass,
-        designerName: loginDesignerName, operatorName: loginOperatorName, administrativeName: loginAdministrativeName,
+        operatorName: loginOperatorName, administrativeName: loginAdministrativeName,
       };
     }
     setLoginLoading(true);
@@ -1779,11 +1792,11 @@ export default function GanaPlayMainApp() {
     } finally {
       setLoginLoading(false);
     }
-  }, [loginMode, loginEmail, loginRole, loginPass, loginDesignerName, loginOperatorName, loginAdministrativeName, rememberMe]);
+  }, [loginMode, loginEmail, loginRole, loginPass, loginOperatorName, loginAdministrativeName, rememberMe]);
 
   const handleLogout = () => {
     setRole(null); setUserName(""); setLoginPass("");
-    setLoginDesignerName(""); setLoginOperatorName(""); setLoginAdministrativeName("");
+    setLoginOperatorName(""); setLoginAdministrativeName("");
     setLoginError(""); setLoginRole(null); setActiveTab('Tablero Kanban');
     setNotifPanelOpen(false);
     try {
@@ -1846,7 +1859,10 @@ export default function GanaPlayMainApp() {
       { key: 'cm',             icon: '🌐', label: 'Community Manager',  sub: 'Redes y contenido' },
       { key: 'operator',       icon: '👤', label: 'Operador',           sub: 'Quota · Juan' },
       { key: 'administrative', icon: '💼', label: 'DIRECTIVOS',         sub: 'Andres · Sebastian · Roberto' },
-      { key: 'designer',       icon: '✦',  label: 'Diseñador',          sub: 'Equipo creativo' },
+      // El equipo de Diseño NO aparece aquí a propósito: entra con su correo
+      // corporativo (arriba) y con su propia contraseña. Cuando estaba en este
+      // menú, cualquiera con la contraseña general podía elegir "Diseñador" y
+      // ver el Centro de Diseño, la IA y los comentarios internos.
     ];
     const selectedCard = ROLE_CARDS.find(c => c.key === loginRole);
     return (
@@ -1922,7 +1938,7 @@ export default function GanaPlayMainApp() {
                     const active = loginRole === card.key;
                     return (
                       <div key={card.key}
-                        onClick={() => { setLoginRole(card.key as "admin" | "cm" | "designer" | "operator" | "administrative"); setLoginPass(''); setLoginDesignerName(''); setLoginOperatorName(''); setLoginAdministrativeName(''); setLoginError(''); }}
+                        onClick={() => { setLoginRole(card.key as "admin" | "cm" | "designer" | "operator" | "administrative"); setLoginPass(''); setLoginOperatorName(''); setLoginAdministrativeName(''); setLoginError(''); }}
                         style={{
                           background: active ? 'var(--accent-soft)' : 'var(--panel-bg)',
                           border: `1.5px solid ${active ? 'var(--accent-color)' : 'var(--border-color)'}`,
@@ -1949,16 +1965,6 @@ export default function GanaPlayMainApp() {
                       <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Acceso con contraseña</div>
                     </div>
                   </div>
-
-                  {loginRole === 'designer' && (
-                    <div style={{ marginBottom: '14px' }}>
-                      <label className="label">Tu nombre</label>
-                      <select value={loginDesignerName} onChange={e => setLoginDesignerName(e.target.value)}>
-                        <option value="">— Selecciona tu nombre —</option>
-                        {DESIGNER_USERS.map(u => <option key={u} value={u}>{u}</option>)}
-                      </select>
-                    </div>
-                  )}
 
                   {loginRole === 'operator' && (
                     <div style={{ marginBottom: '14px' }}>
@@ -2495,7 +2501,29 @@ export default function GanaPlayMainApp() {
                         <div style={{ padding: '14px 18px', display: 'flex', gap: '14px', flexWrap: 'wrap' }}>
                           {req.creatives.map((creative, idx) => (
                             <div key={idx} style={{ display: 'flex', flexDirection: 'column', gap: '6px', alignItems: 'center', background: 'var(--surface-1)', padding: '10px', borderRadius: '10px', border: '1px solid var(--border-color)' }}>
-                              <img src={creative.url} alt={`Creativo ${creative.type}`} style={{ width: '88px', height: '88px', objectFit: 'cover', borderRadius: '8px' }} />
+                              {(() => {
+                                const kind = mediaKindOf(creative.type, creative.url);
+                                const box = { width: '88px', height: '88px', objectFit: 'cover' as const, borderRadius: '8px' };
+                                if (kind === 'doc') return (
+                                  <div style={{ ...box, background: 'var(--surface-2)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                                    <FileText size={28} color="var(--text-secondary)" />
+                                  </div>
+                                );
+                                if (kind === 'video') return (
+                                  <div style={{ ...box, position: 'relative', overflow: 'hidden', background: '#000', cursor: 'zoom-in' }}
+                                    title="Clic para reproducir"
+                                    onClick={() => setLightboxImage({ url: creative.url, filename: creative.type })}>
+                                    <video src={creative.url} preload="metadata" muted playsInline style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                                    <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(0,0,0,0.25)' }}>
+                                      <Play size={24} color="#fff" fill="#fff" />
+                                    </div>
+                                  </div>
+                                );
+                                return (
+                                  <img src={creative.url} alt={`Creativo ${creative.type}`} style={{ ...box, cursor: 'zoom-in' }}
+                                    onClick={() => setLightboxImage({ url: creative.url, filename: creative.type })} />
+                                );
+                              })()}
                               <span style={{ fontSize: '11px', color: 'var(--text-secondary)', fontWeight: 600 }}>{creative.type}</span>
                               {creative.aiEvaluation && (
                                 <span className={`badge badge-${creative.aiEvaluation.color}`} style={{ fontSize: '10px' }}>{creative.aiEvaluation.rating}/10</span>
@@ -3490,11 +3518,12 @@ export default function GanaPlayMainApp() {
                     <>
                       <label className="btn" style={{ width: '100%', cursor: 'pointer', padding: '12px' }}>
                         <UploadCloud size={16} /> Subir entregables (uno o varios)
-                        <input type="file" multiple accept=".jpg,.jpeg,.png,.webp,.pdf,.zip"
+                        <input type="file" multiple accept={DELIVERABLE_ACCEPT}
                           onChange={handleDeliverablesUpload} style={{ display: 'none' }} />
                       </label>
                       <p style={{ fontSize: '11px', color: 'var(--text-muted)', margin: '8px 0 14px' }}>
-                        Formatos: JPG, PNG, WEBP, PDF, ZIP. Puedes seleccionar varios archivos a la vez.
+                        Estáticos: JPG, PNG, WEBP · Animados: GIF, APNG · Video: MP4, WEBM, MOV · Archivos: PDF, ZIP.
+                        <br />Hasta {formatMB(MAX_FILE_BYTES)} por archivo ({formatMB(MAX_VIDEO_BYTES)} en video). Puedes seleccionar varios a la vez.
                       </p>
                     </>
                   )}
@@ -3506,13 +3535,28 @@ export default function GanaPlayMainApp() {
                       </div>
                     )}
                     {selectedReq.creatives.map((creative, idx) => {
-                      const isFile = /\.(pdf|zip)$/i.test(creative.type);
+                      const kind = mediaKindOf(creative.type, creative.url);
+                      const abrir = () => setLightboxImage({
+                        url: creative.url,
+                        filename: creative.type || `entregable_${selectedReq.id}.${guessExtFromImageUrl(creative.url)}`,
+                      });
                       return (
                         <div key={idx} className="card" style={{ padding: '14px' }}>
                           <div style={{ display: 'flex', gap: '12px', alignItems: 'flex-start' }}>
-                            {isFile ? (
+                            {kind === 'doc' ? (
                               <div style={{ width: '70px', height: '70px', borderRadius: '8px', flexShrink: 0, background: 'var(--surface-2)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                                 <FileText size={26} color="var(--text-secondary)" />
+                              </div>
+                            ) : kind === 'video' ? (
+                              // Miniatura de video: primer fotograma + botón de play.
+                              // `preload="metadata"` evita descargar el video entero.
+                              <div onClick={abrir} title="Clic para reproducir"
+                                style={{ position: 'relative', width: '70px', height: '70px', borderRadius: '8px', flexShrink: 0, overflow: 'hidden', border: '1px solid var(--border-color)', cursor: 'zoom-in', background: '#000' }}>
+                                <video src={creative.url} preload="metadata" muted playsInline
+                                  style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                                <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(0,0,0,0.25)' }}>
+                                  <Play size={22} color="#fff" fill="#fff" />
+                                </div>
                               </div>
                             ) : (
                               <img
@@ -3520,10 +3564,7 @@ export default function GanaPlayMainApp() {
                                 alt={creative.type}
                                 title="Clic para ampliar"
                                 style={{ width: '70px', height: '70px', objectFit: 'cover', borderRadius: '8px', flexShrink: 0, border: '1px solid var(--border-color)', cursor: 'zoom-in' }}
-                                onClick={() => setLightboxImage({
-                                  url: creative.url,
-                                  filename: creative.type || `entregable_${selectedReq.id}.${guessExtFromImageUrl(creative.url)}`,
-                                })}
+                                onClick={abrir}
                               />
                             )}
                             <div style={{ flex: 1, minWidth: 0 }}>
@@ -3728,16 +3769,32 @@ export default function GanaPlayMainApp() {
               maxWidth: '92vw', maxHeight: '92vh',
             }}
           >
-            <img
-              src={lightboxImage.url}
-              alt="Vista ampliada"
-              style={{
-                maxWidth: '100%', maxHeight: '78vh',
-                objectFit: 'contain', borderRadius: '10px',
-                boxShadow: '0 20px 60px rgba(0,0,0,0.5)',
-                cursor: 'default',
-              }}
-            />
+            {mediaKindOf(lightboxImage.filename, lightboxImage.url) === 'video' ? (
+              <video
+                src={lightboxImage.url}
+                controls
+                autoPlay
+                loop
+                playsInline
+                style={{
+                  maxWidth: '100%', maxHeight: '78vh',
+                  borderRadius: '10px',
+                  boxShadow: '0 20px 60px rgba(0,0,0,0.5)',
+                  background: '#000',
+                }}
+              />
+            ) : (
+              <img
+                src={lightboxImage.url}
+                alt="Vista ampliada"
+                style={{
+                  maxWidth: '100%', maxHeight: '78vh',
+                  objectFit: 'contain', borderRadius: '10px',
+                  boxShadow: '0 20px 60px rgba(0,0,0,0.5)',
+                  cursor: 'default',
+                }}
+              />
+            )}
             <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
               <button
                 onClick={() => downloadImageByUrl(lightboxImage.url, lightboxImage.filename)}

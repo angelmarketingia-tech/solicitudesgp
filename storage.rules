@@ -13,7 +13,11 @@ rules_version = '2';
 //     2.27 MB en image/png ................ OK
 //     2.27 MB en application/zip .......... OK
 //     0.10 MB en MIME de Word (.docx) ..... 403 storage/unauthorized
-//     .doc, octet-stream, mp4, text/plain . 403 storage/unauthorized
+//     .doc, octet-stream, text/plain ...... 403 storage/unauthorized
+//     video/mp4, webm, quicktime .......... 403 storage/unauthorized
+//                                           (en TODAS las rutas, también
+//                                            social-media/ — por eso no hay
+//                                            ni un video en el bucket)
 //
 // O sea: el problema de "no se pudo adjuntar el Word" NO era el tamaño, era
 // el tipo de archivo. Como paño de agua tibia, `src/lib/storage-upload.ts`
