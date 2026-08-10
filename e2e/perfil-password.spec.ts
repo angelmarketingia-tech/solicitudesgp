@@ -15,7 +15,6 @@ test.use({ baseURL: process.env.E2E_BASE_URL || "http://localhost:3001" });
 
 async function entrarComoDisenador(page: Page) {
   await page.goto("/");
-  await page.getByRole("button", { name: /Acceso por rol/i }).click();
   await page.getByText("Diseñador", { exact: true }).click();
   await page.getByRole("combobox").selectOption("Juan David");
   await page.getByPlaceholder("••••••••••••").fill(DESIGNER_PASS);
@@ -93,16 +92,15 @@ test("crea la contraseña personal y sirve para entrar", async ({ page }) => {
   await f.guardar.click();
   await expect(page.getByText(/La próxima vez entra con tu correo/i)).toBeVisible({ timeout: 30_000 });
 
-  // Y ahora entra con su correo + la contraseña nueva.
+  // Y ahora entra por el menú de roles con SU contraseña nueva (la compartida
+  // ya no hace falta: el acceso sigue siendo el mismo, la clave es suya).
   await f.modal.click({ position: { x: 6, y: 6 } });   // cerrar el modal
   await expect(page.getByRole("heading", { name: "Mi perfil" })).toHaveCount(0);
   await page.getByRole("button", { name: /Cerrar sesión/i }).click();
-  // Al salir queda la pantalla de roles (fue el último modo usado).
-  const volver = page.getByRole("button", { name: /Volver al acceso por correo/i });
-  if (await volver.isVisible().catch(() => false)) await volver.click();
-  await page.getByPlaceholder("nombre.apellido@ganaplay.com").fill(CORREO);
+  await page.getByText("Diseñador", { exact: true }).click();
+  await page.getByRole("combobox").selectOption("Juan David");
   await page.getByPlaceholder("••••••••••••").fill(nueva);
-  await page.getByRole("button", { name: /Iniciar sesión/i }).click();
+  await page.getByRole("button", { name: /Acceder al sistema/i }).click();
   await expect(page.getByRole("heading", { name: /Solicitudes de diseño/i })).toBeVisible({ timeout: 25_000 });
   await expect(page.getByText("Centro de Diseño")).toBeVisible();
 });

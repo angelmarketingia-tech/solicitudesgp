@@ -17,8 +17,6 @@ test.use({ baseURL: process.env.E2E_BASE_URL || "http://localhost:3001" });
 
 async function loginAsAdmin(page: Page) {
   await page.goto("/");
-  // La pantalla nueva entra por correo; el acceso por rol está detrás de este botón.
-  await page.getByRole("button", { name: /Acceso por rol/i }).click();
   await page.getByText("Trafficker").click();
   await page.getByPlaceholder("••••••••••••").fill(ADMIN_PASS);
   await page.getByRole("button", { name: /Acceder al sistema/i }).click();

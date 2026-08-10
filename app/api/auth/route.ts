@@ -185,7 +185,16 @@ export async function POST(req: Request) {
       const entry = DIRECTORY.get(correo);
       if (!entry) {
         return NextResponse.json(
-          { ok: false, error: "Tu correo no está dado de alta en el sistema. Pídeselo al Trafficker." },
+          { ok: false, error: "Tu cuenta no está dada de alta en el sistema. Pídeselo al Trafficker." },
+          { status: 403 }
+        );
+      }
+      // El rol sale del directorio, nunca de lo que pida el cliente. Si eligió
+      // un perfil que no es el suyo, se rechaza en vez de colarlo en otro:
+      // así una contraseña personal solo abre SU perfil.
+      if (role && role !== entry.role) {
+        return NextResponse.json(
+          { ok: false, error: "Esa contraseña no corresponde al perfil seleccionado." },
           { status: 403 }
         );
       }

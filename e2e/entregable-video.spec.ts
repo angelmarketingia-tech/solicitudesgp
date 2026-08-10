@@ -17,7 +17,6 @@ test("el diseñador entrega un MP4 y un GIF", async ({ page }) => {
   page.on("console", (m) => { if (m.type() === "error") console.log(`[browser:error] ${m.text()}`); });
 
   await page.goto("/");
-  await page.getByRole("button", { name: /Acceso por rol/i }).click();
   await page.getByText("Diseñador", { exact: true }).click();
   await page.getByRole("combobox").selectOption("Juan David");
   await page.getByPlaceholder("••••••••••••").fill(DESIGNER_PASS);

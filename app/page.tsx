@@ -294,8 +294,6 @@ export default function GanaPlayMainApp() {
 
   // ── Login ──
   // Acceso principal: correo corporativo. "Acceso por rol" queda como respaldo.
-  const [loginMode, setLoginMode] = useState<'email' | 'role'>('email');
-  const [loginEmail, setLoginEmail] = useState(() => { try { return localStorage.getItem('gp_email') || ''; } catch { return ''; } });
   const [rememberMe, setRememberMe] = useState(() => { try { return localStorage.getItem('gp_remember') !== '0'; } catch { return true; } });
   const [loginRole, setLoginRole] = useState<"admin" | "cm" | "designer" | "operator" | "administrative" | null>(null);
   // Panel "Mi perfil": cambio de contraseña personal.
@@ -1735,46 +1733,59 @@ export default function GanaPlayMainApp() {
     }
   }, [selectedReq, addToast]);
 
-  // ─── Login unificado: la contraseña se valida en el servidor ───
+  // Nombre de la persona que está entrando, según el rol elegido.
+  const nombreElegido = useMemo(() => {
+    if (loginRole === 'designer') return loginDesignerName;
+    if (loginRole === 'operator') return loginOperatorName;
+    if (loginRole === 'administrative') return loginAdministrativeName;
+    if (loginRole === 'admin') return 'Trafficker';
+    if (loginRole === 'cm') return 'Community Manager';
+    return '';
+  }, [loginRole, loginDesignerName, loginOperatorName, loginAdministrativeName]);
+
+  // ─── Login por rol. La contraseña se valida SIEMPRE en el servidor ───
   const handleLogin = useCallback(async () => {
     setLoginError("");
-    // Cuerpo de la petición según el modo de acceso.
-    let body: Record<string, string>;
-    if (loginMode === 'email') {
-      if (!loginEmail.trim()) { setLoginError("Ingresa tu correo corporativo."); return; }
-      if (!loginPass) { setLoginError("Ingresa tu contraseña."); return; }
-      // 1º su contraseña PERSONAL (si ya la creó). Si no tiene, se sigue con la
-      // compartida de siempre: nadie se queda fuera durante la transición.
-      setLoginLoading(true);
-      const personal = await entrarConPersonal(loginEmail.trim(), loginPass);
-      setLoginLoading(false);
-      if (personal.ok && personal.idToken) {
-        body = { idToken: personal.idToken };
-      } else if (!personal.ok && personal.error !== 'sin-cuenta') {
-        setLoginError("❌ " + personal.error);
-        return;
-      } else {
-        body = { email: loginEmail.trim(), password: loginPass };
-      }
-    } else {
-      if (!loginRole) return;
-      if (loginRole === "designer" && !loginDesignerName) { setLoginError("Selecciona tu nombre."); return; }
-      if (loginRole === "operator" && !loginOperatorName) { setLoginError("Selecciona tu nombre."); return; }
-      if (loginRole === "administrative" && !loginAdministrativeName) { setLoginError("Selecciona tu nombre."); return; }
-      if (!loginPass) { setLoginError("Ingresa la contraseña."); return; }
-      body = {
-        role: loginRole, password: loginPass,
-        designerName: loginDesignerName, operatorName: loginOperatorName, administrativeName: loginAdministrativeName,
-      };
-    }
+    if (!loginRole) return;
+    if (loginRole === "designer" && !loginDesignerName) { setLoginError("Selecciona tu nombre."); return; }
+    if (loginRole === "operator" && !loginOperatorName) { setLoginError("Selecciona tu nombre."); return; }
+    if (loginRole === "administrative" && !loginAdministrativeName) { setLoginError("Selecciona tu nombre."); return; }
+    if (!loginPass) { setLoginError("Ingresa la contraseña."); return; }
+
     setLoginLoading(true);
     try {
-      const res = await fetch("/api/auth", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
+      const pedirSesion = async (body: Record<string, string>) => {
+        const res = await fetch("/api/auth", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        });
+        return { res, data: await res.json() };
+      };
+
+      // ORDEN IMPORTANTE:
+      //  1º la contraseña COMPARTIDA del rol, que es la que usa hoy casi todo
+      //     el equipo. Se valida en nuestro servidor.
+      //  2º solo si esa falla, la contraseña PERSONAL contra Firebase.
+      // Al revés, cada intento normal generaba un fallo en Firebase y sus
+      // bloqueos por "demasiados intentos" dejaban a la gente fuera de la app.
+      let { res, data } = await pedirSesion({
+        role: loginRole, password: loginPass,
+        designerName: loginDesignerName, operatorName: loginOperatorName, administrativeName: loginAdministrativeName,
       });
-      const data = await res.json();
+
+      if (!res.ok || !data.ok) {
+        const correo = emailForUser(nombreElegido);
+        if (correo) {
+          const personal = await entrarConPersonal(correo, loginPass);
+          if (personal.ok && personal.idToken) {
+            ({ res, data } = await pedirSesion({ idToken: personal.idToken, role: loginRole }));
+          } else if (!personal.ok && personal.error !== 'sin-cuenta') {
+            setLoginError("❌ " + personal.error);
+            return;
+          }
+        }
+      }
+
       if (!res.ok || !data.ok) {
         setLoginError("❌ " + (data.error || "No se pudo iniciar sesión."));
         return;
@@ -1793,14 +1804,12 @@ export default function GanaPlayMainApp() {
         sessionStorage.setItem("gp_userName", data.userName);
         // El correo se guarda siempre en la sesión: lo necesita "Mi perfil"
         // para saber de quién es la contraseña que se va a cambiar.
-        if (loginMode === 'email') sessionStorage.setItem("gp_email", loginEmail.trim());
         localStorage.removeItem("gp_role");
         localStorage.removeItem("gp_userName");
         if (rememberMe) {
           localStorage.setItem("gp_role", data.role);
           localStorage.setItem("gp_userName", data.userName);
           localStorage.setItem("gp_remember", "1");
-          if (loginMode === 'email') localStorage.setItem("gp_email", loginEmail.trim());
         } else {
           localStorage.setItem("gp_remember", "0");
           localStorage.removeItem("gp_email");
@@ -1812,7 +1821,7 @@ export default function GanaPlayMainApp() {
     } finally {
       setLoginLoading(false);
     }
-  }, [loginMode, loginEmail, loginRole, loginPass, loginDesignerName, loginOperatorName, loginAdministrativeName, rememberMe]);
+  }, [nombreElegido, loginRole, loginPass, loginDesignerName, loginOperatorName, loginAdministrativeName, rememberMe]);
 
   // Correo de quien está usando la app: el que escribió al entrar, o el que le
   // corresponde por nombre en el directorio (quien entró por el menú de roles).
@@ -1938,76 +1947,8 @@ export default function GanaPlayMainApp() {
             <p style={{ color: 'var(--text-secondary)', fontSize: '14px', margin: 0 }}>Plataforma de solicitudes creativas</p>
           </div>
 
-          {loginMode === 'email' ? (
-            /* ── Acceso corporativo por correo (principal) ── */
-            <div className="card" style={{ padding: '28px' }}>
-              <div style={{ textAlign: 'center', marginBottom: '22px' }}>
-                <div style={{ fontSize: '15px', fontWeight: 800, color: 'var(--accent-dark)' }}>Acceso corporativo</div>
-                <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '3px' }}>Inicia sesión con tu correo <strong>@ganaplay.com</strong></div>
-              </div>
-
-              <div style={{ marginBottom: '14px' }}>
-                <label className="label">Correo corporativo</label>
-                <input type="email" autoComplete="username" placeholder="nombre.apellido@ganaplay.com" autoFocus
-                  value={loginEmail} onChange={e => setLoginEmail(e.target.value)}
-                  onKeyDown={e => { if (e.key === 'Enter' && !loginLoading) handleLogin(); }} />
-              </div>
-
-              <div style={{ marginBottom: '16px' }}>
-                <label className="label">Contraseña</label>
-                <input type="password" autoComplete="current-password" placeholder="••••••••••••"
-                  value={loginPass} onChange={e => setLoginPass(e.target.value)}
-                  onKeyDown={e => { if (e.key === 'Enter' && !loginLoading) handleLogin(); }} />
-              </div>
-
-              <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px', color: 'var(--text-secondary)', marginBottom: '18px', cursor: 'pointer', width: 'auto' }}>
-                <input type="checkbox" checked={rememberMe} onChange={e => setRememberMe(e.target.checked)} style={{ width: 'auto' }} />
-                Recordar mis datos y mantener la sesión iniciada
-              </label>
-
-              {loginError && (
-                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '10px 14px', background: 'var(--danger-soft)', border: '1px solid #f5c6c2', borderRadius: '10px', marginBottom: '14px' }}>
-                  <span style={{ color: 'var(--danger)', fontSize: '12px', fontWeight: 600 }}>{loginError}</span>
-                </div>
-              )}
-
-              <button className="btn" disabled={loginLoading} onClick={handleLogin}
-                style={{ width: '100%', padding: '14px', fontSize: '14px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
-                {loginLoading ? 'Verificando…' : 'Iniciar sesión →'}
-              </button>
-
-              <div style={{ textAlign: 'center', marginTop: '14px' }}>
-                <button
-                  onClick={async () => {
-                    setLoginError("");
-                    if (!loginEmail.trim()) { setLoginError("Escribe tu correo arriba y vuelve a pulsar aquí."); return; }
-                    setLoginLoading(true);
-                    const r = await recuperarPassword(loginEmail.trim());
-                    setLoginLoading(false);
-                    // Mismo mensaje exista o no la cuenta: no revelamos quién está dado de alta.
-                    setLoginError(r.ok
-                      ? `✉️ Si ${loginEmail.trim()} tiene contraseña personal, te llegó un correo para restablecerla.`
-                      : "❌ " + r.error);
-                  }}
-                  style={{ background: 'none', border: 'none', color: 'var(--text-muted)', fontSize: '12px', cursor: 'pointer', textDecoration: 'underline', width: 'auto', padding: 0 }}>
-                  Olvidé mi contraseña
-                </button>
-              </div>
-
-              <div style={{ textAlign: 'center', marginTop: '10px' }}>
-                <button onClick={() => { setLoginMode('role'); setLoginError(''); }}
-                  style={{ background: 'none', border: 'none', color: 'var(--text-muted)', fontSize: '12px', cursor: 'pointer', textDecoration: 'underline', width: 'auto', padding: 0 }}>
-                  Acceso por rol (equipo interno)
-                </button>
-              </div>
-
-              <p style={{ textAlign: 'center', fontSize: '10px', color: 'var(--text-muted)', marginTop: '14px', marginBottom: 0 }}>
-                🔒 Acceso seguro · GanaPlay {new Date().getFullYear()}
-              </p>
-            </div>
-          ) : (
-            /* ── Acceso por rol (respaldo del método anterior) ── */
-            <>
+          {/* ── Acceso por rol: único método de entrada ── */}
+          <>
               <div style={{ marginBottom: '20px' }}>
                 <p style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '1.5px', textAlign: 'center', marginBottom: '12px' }}>Selecciona tu rol</p>
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '10px' }}>
@@ -2091,17 +2032,38 @@ export default function GanaPlayMainApp() {
                     style={{ width: '100%', padding: '14px', fontSize: '14px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
                     {loginLoading ? 'Verificando…' : 'Acceder al sistema →'}
                   </button>
+
+                  {/* Solo tiene sentido para quien ya creó su contraseña personal,
+                      que va ligada a su correo del directorio. */}
+                  {emailForUser(nombreElegido) && (
+                    <div style={{ textAlign: 'center', marginTop: '14px' }}>
+                      <button
+                        onClick={async () => {
+                          setLoginError("");
+                          setLoginLoading(true);
+                          const r = await recuperarPassword(emailForUser(nombreElegido));
+                          setLoginLoading(false);
+                          setLoginError(r.ok
+                            ? `✉️ Si tienes contraseña personal, te llegó un correo a ${emailForUser(nombreElegido)} para restablecerla.`
+                            : "❌ " + r.error);
+                        }}
+                        style={{ background: 'none', border: 'none', color: 'var(--text-muted)', fontSize: '12px', cursor: 'pointer', textDecoration: 'underline', width: 'auto', padding: 0 }}>
+                        Olvidé mi contraseña
+                      </button>
+                    </div>
+                  )}
                 </div>
               )}
 
-              <div style={{ textAlign: 'center', marginTop: '16px' }}>
-                <button onClick={() => { setLoginMode('email'); setLoginRole(null); setLoginError(''); }}
-                  style={{ background: 'none', border: 'none', color: 'var(--text-muted)', fontSize: '12px', cursor: 'pointer', textDecoration: 'underline', width: 'auto', padding: 0 }}>
-                  ← Volver al acceso por correo
-                </button>
-              </div>
+              <label style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px', fontSize: '12.5px', color: 'var(--text-secondary)', marginTop: '16px', cursor: 'pointer', width: 'auto' }}>
+                <input type="checkbox" checked={rememberMe} onChange={e => setRememberMe(e.target.checked)} style={{ width: 'auto' }} />
+                Recordar mis datos y mantener la sesión iniciada
+              </label>
+
+              <p style={{ textAlign: 'center', fontSize: '10px', color: 'var(--text-muted)', marginTop: '14px', marginBottom: 0 }}>
+                🔒 Acceso seguro · GanaPlay {new Date().getFullYear()}
+              </p>
             </>
-          )}
         </div>
       </div>
     );
