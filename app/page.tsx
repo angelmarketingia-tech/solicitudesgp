@@ -15,7 +15,7 @@ import {
 import { db, storage } from '@/lib/firebase';
 import {
   collection, doc, onSnapshot, setDoc, updateDoc, deleteDoc,
-  addDoc, query, orderBy, serverTimestamp, getDoc, getDocs, limit, limitToLast, arrayUnion
+  addDoc, query, orderBy, serverTimestamp, getDoc, getDocs, limit, limitToLast, arrayUnion, runTransaction
 } from 'firebase/firestore';
 import { ref, deleteObject, listAll } from 'firebase/storage';
 import { emailForUser, DEFAULT_TRAFFICKER_EMAIL, DEFAULT_REQUESTER_EMAILS, SUGGESTED_REQUESTER_EMAILS } from '@/lib/users';
@@ -610,6 +610,45 @@ export default function GanaPlayMainApp() {
     return `GP${maxNum + 1}`;
   };
 
+  /**
+   * Reserva un ID LIBRE de verdad, comprobándolo contra el servidor.
+   *
+   * `getNextId()` calcula sobre la lista que hay en memoria. Si esa lista aún
+   * no ha llegado (recién abierta la app, conexión lenta), devuelve GP6612 —
+   * el arranque por defecto— y como se guardaba con `setDoc`, ese guardado
+   * PISABA la solicitud GP6612 que ya existía. Pasó de verdad: se perdió una
+   * solicitud y hubo que reconstruirla a mano.
+   *
+   * Ahora se verifica contra Firestore y se avanza hasta encontrar un hueco.
+   */
+  const reservarIdLibre = useCallback(async (): Promise<string | null> => {
+    let inicio = parseInt(getNextId().replace("GP", ""));
+    // Si la lista local aún no ha llegado, el número calculado sería el de
+    // arranque (GP6612) y arrancaríamos pisando. Se pregunta al servidor.
+    if (requests.length === 0) {
+      try {
+        const todas = await getDocs(collection(db, "requests"));
+        const nums = todas.docs
+          .map(d => parseInt(d.id.replace("GP", "")))
+          .filter(n => !isNaN(n));
+        if (nums.length > 0) inicio = Math.max(...nums) + 1;
+      } catch {
+        return null;
+      }
+    }
+    for (let n = inicio; n < inicio + 100; n++) {
+      const id = `GP${n}`;
+      try {
+        const existe = await getDoc(doc(db, "requests", id));
+        if (!existe.exists()) return id;
+      } catch {
+        return null;   // sin red: mejor no crear nada que arriesgarse a pisar
+      }
+    }
+    return null;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [requests]);
+
   // ─── Crear notificación interna en Firestore ───
   const createNotification = useCallback(async (
     type: NotificationItem['type'],
@@ -713,17 +752,23 @@ export default function GanaPlayMainApp() {
     // son OPCIONALES (ya no se exige al menos una).
     const pendingDim = customDim.trim();
     const dims = pendingDim && !dimensions.includes(pendingDim) ? [...dimensions, pendingDim] : dimensions;
-    if (!titleStr || !copyStr || !deliveryDate || countries.length === 0
-      || !requesterName || emails.length === 0 || !objective || !area) {
-      addToast("Completa los campos obligatorios del brief (marcados con *). Agrega al menos un correo del solicitante.", 'error');
+    // Lo ÚNICO obligatorio es el nombre de la solicitud. Todo lo demás se
+    // puede completar después desde "Editar": pedir nueve campos por
+    // adelantado frenaba a quien solo quiere dejar el pedido levantado.
+    if (!titleStr.trim()) {
+      addToast("Ponle un nombre a la solicitud.", 'error');
       return;
     }
+    // Si no escribió quién solicita, queda quien está usando la app: así la
+    // solicitud nunca se queda sin dueño (y el filtro por perfil sigue
+    // sabiendo de quién es).
+    const solicitante = requesterName.trim() || userName || "";
     const badEmail = emails.find(e2 => !isValidEmail(e2));
     if (badEmail) {
       addToast(`El correo "${badEmail}" no es válido.`, 'error');
       return;
     }
-    const requesterEmail = emails[0];
+    const requesterEmail = emails[0] || "";
     const requesterEmails2 = emails;
 
     // ── Modo EDICIÓN: actualiza el brief de una solicitud existente ──
@@ -731,7 +776,7 @@ export default function GanaPlayMainApp() {
       const patch = {
         title: titleStr || "Nuevo Requerimiento", copy: copyStr, format, requestKind,
         dimensions: dims, countries, deliveryDate, priority, area,
-        requesterName, requesterEmail, requesterEmails: requesterEmails2, objective, channels,
+        requesterName: solicitante, requesterEmail, requesterEmails: requesterEmails2, objective, channels,
         referenceImages: referenceImgs, referenceFiles,
         history: arrayUnion({ action: "Solicitud editada", by: userName, at: new Date().toISOString() }),
         updatedAt: serverTimestamp(),
@@ -739,7 +784,7 @@ export default function GanaPlayMainApp() {
       try {
         await updateDoc(doc(db, "requests", editingReqId), patch);
         setSelectedReq(prev => (prev && prev.id === editingReqId)
-          ? { ...prev, title: patch.title, copy: copyStr, format, requestKind, dimensions: dims, countries, deliveryDate, priority, area, requesterName, requesterEmail, requesterEmails: requesterEmails2, objective, channels, referenceImages: referenceImgs, referenceFiles }
+          ? { ...prev, title: patch.title, copy: copyStr, format, requestKind, dimensions: dims, countries, deliveryDate, priority, area, requesterName: solicitante, requesterEmail, requesterEmails: requesterEmails2, objective, channels, referenceImages: referenceImgs, referenceFiles }
           : prev);
         const eid = editingReqId;
         setEditingReqId(null);
@@ -752,7 +797,12 @@ export default function GanaPlayMainApp() {
       return;
     }
 
-    const nextId = getNextId();
+    // El ID se confirma contra el servidor: nunca reutilizar uno existente.
+    const nextId = await reservarIdLibre();
+    if (!nextId) {
+      addToast("No se pudo reservar un número de solicitud. Revisa tu conexión e inténtalo de nuevo.", 'error');
+      return;
+    }
     const now = new Date().toISOString();
     // Comentario/recomendación inicial (opcional): texto y/o imágenes pegadas.
     // Se guardan como los primeros mensajes del hilo desde la creación. El
@@ -792,7 +842,7 @@ export default function GanaPlayMainApp() {
       status: "Pendiente",
       priority,
       area,
-      requesterName,
+      requesterName: solicitante,
       requesterEmail,
       requesterEmails: requesterEmails2,
       objective,
@@ -806,11 +856,19 @@ export default function GanaPlayMainApp() {
     };
 
     try {
-      await setDoc(doc(db, "requests", nextId), { ...newReq, updatedAt: serverTimestamp() });
+      // Transacción: si entre la reserva y el guardado alguien ocupó ese
+      // número (dos personas creando a la vez), la escritura se aborta en vez
+      // de sobrescribir una solicitud ajena.
+      await runTransaction(db, async (tx) => {
+        const ref2 = doc(db, "requests", nextId);
+        const yaExiste = await tx.get(ref2);
+        if (yaExiste.exists()) throw new Error("ID_OCUPADO");
+        tx.set(ref2, { ...newReq, updatedAt: serverTimestamp() });
+      });
       resetCreateForm();
       setCreateModalOpen(false);
       addToast(`Solicitud ${nextId} creada correctamente.`, 'success');
-      await createNotification('new_request', '📋 Nueva solicitud', `${nextId}: "${newReq.title}" — Entrega ${newReq.deliveryDate}`, 'designer', nextId);
+      await createNotification('new_request', '📋 Nueva solicitud', `${nextId}: "${newReq.title}" — Entrega ${newReq.deliveryDate || "sin fecha"}`, 'designer', nextId);
 
       // Regla de alertas: solo prioridad alta/urgente envía correo inmediato.
       if (priority === "Alto" || priority === "Urgente") {
@@ -823,7 +881,10 @@ export default function GanaPlayMainApp() {
         });
       }
     } catch (err: unknown) {
-      addToast("Error al guardar: " + (err instanceof Error ? err.message : "desconocido"), 'error');
+      const msg = err instanceof Error ? err.message : "desconocido";
+      addToast(msg === "ID_OCUPADO"
+        ? "Alguien creó una solicitud al mismo tiempo. Pulsa «Crear» otra vez y se le asignará el siguiente número."
+        : "Error al guardar: " + msg, 'error');
     }
   };
 
@@ -2232,7 +2293,7 @@ export default function GanaPlayMainApp() {
                           <span style={{ fontSize: '14px', fontWeight: 600, color: 'var(--text-primary)', lineHeight: 1.4 }}>
                             <span style={{ color: 'var(--accent-color)', fontWeight: 800, fontSize: '12px' }}>{c.id}</span> {c.title}
                           </span>
-                          <div style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>📅 {c.deliveryDate} · {c.area || 'Sin área'}</div>
+                          <div style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>📅 {c.deliveryDate || "Sin fecha"} · {c.area || 'Sin área'}</div>
                         </div>
                       </div>
                     </div>
@@ -2268,7 +2329,7 @@ export default function GanaPlayMainApp() {
                       <div style={{ display: 'flex', flexDirection: 'column', gap: '3px', minWidth: 0 }}>
                         <span style={{ fontSize: '12px', color: 'var(--accent-color)', fontWeight: 800 }}>{req.id}</span>
                         <span style={{ fontSize: '15px', fontWeight: 700, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{req.title}</span>
-                        <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Entrega: {req.deliveryDate} · {req.countries.join(' / ')}</span>
+                        <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Entrega: {req.deliveryDate || "sin fecha"} · {req.countries.join(' / ')}</span>
                       </div>
                       <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexShrink: 0 }}>
                         <span className="badge" style={{ background: priorityConfig[req.priority ?? 'Medio'].bg, color: priorityConfig[req.priority ?? 'Medio'].text }}>{req.priority ?? 'Medio'}</span>
@@ -2488,7 +2549,7 @@ export default function GanaPlayMainApp() {
                         style={{ padding: '14px', borderLeft: `4px solid ${priorityConfig[req.priority ?? 'Medio'].text}`, display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '12px', cursor: 'pointer' }}
                         onClick={() => { setSelectedReq(req); setModalOpen(true); }}>
                         <div style={{ minWidth: 0 }}>
-                          <div style={{ fontSize: '11px', color: 'var(--text-secondary)', marginBottom: '3px' }}>{req.id} • Entrega {req.deliveryDate} • {req.area || 'Sin área'}</div>
+                          <div style={{ fontSize: '11px', color: 'var(--text-secondary)', marginBottom: '3px' }}>{req.id} • Entrega {req.deliveryDate || "sin fecha"} • {req.area || 'Sin área'}</div>
                           <div style={{ fontSize: '14px', fontWeight: 700, color: 'var(--text-primary)' }}>{req.title}</div>
                           <div style={{ marginTop: '6px', display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
                             <span className="badge" style={{ background: STATUS_COLORS[req.status], color: STATUS_TEXT_COLORS[req.status], fontSize: '10px' }}>{req.status}</span>
@@ -2580,7 +2641,7 @@ export default function GanaPlayMainApp() {
                         </div>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '16px', fontSize: '13px', color: 'var(--text-secondary)' }}>
                           <span>{req.countries.join(' / ')}</span>
-                          <span>Entrega: <strong style={{ color: 'var(--text-primary)' }}>{req.deliveryDate}</strong></span>
+                          <span>Entrega: <strong style={{ color: 'var(--text-primary)' }}>{req.deliveryDate || "sin fecha"}</strong></span>
                           <ChevronRight size={18} color="var(--accent-color)" />
                         </div>
                       </div>
@@ -2910,14 +2971,14 @@ export default function GanaPlayMainApp() {
 
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
                 <div className="form-group">
-                  <label className="label">Área solicitante *</label>
+                  <label className="label">Área solicitante</label>
                   <select value={area} onChange={(e) => setArea(e.target.value)}>
                     {AREAS.map(a => <option key={a} value={a}>{a}</option>)}
                   </select>
                 </div>
                 <div className="form-group">
-                  <label className="label">Nombre del solicitante *</label>
-                  <input type="text" placeholder="Tu nombre" value={requesterName} onChange={(e) => setRequesterName(e.target.value)} required />
+                  <label className="label">Nombre del solicitante</label>
+                  <input type="text" placeholder="Tu nombre" value={requesterName} onChange={(e) => setRequesterName(e.target.value)} />
                 </div>
               </div>
 
@@ -2969,17 +3030,17 @@ export default function GanaPlayMainApp() {
               </div>
 
               <div className="form-group">
-                <label className="label">Objetivo de la pieza *</label>
-                <input type="text" placeholder="¿Qué se busca lograr con este diseño?" value={objective} onChange={(e) => setObjective(e.target.value)} required />
+                <label className="label">Objetivo de la pieza</label>
+                <input type="text" placeholder="¿Qué se busca lograr con este diseño?" value={objective} onChange={(e) => setObjective(e.target.value)} />
               </div>
 
               <div className="form-group">
-                <label className="label">Copy / Instrucción principal *</label>
-                <textarea rows={3} value={copyStr} onChange={(e) => setCopyStr(e.target.value)} required />
+                <label className="label">Copy / Instrucción principal</label>
+                <textarea rows={3} value={copyStr} onChange={(e) => setCopyStr(e.target.value)} />
               </div>
 
               <div className="form-group">
-                <label className="label">Tipo de solicitud *</label>
+                <label className="label">Tipo de solicitud</label>
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: '10px' }}>
                   {REQUEST_KINDS.map(k => {
                     const active = requestKind === k.id;
@@ -3002,7 +3063,7 @@ export default function GanaPlayMainApp() {
               </div>
 
               <div className="form-group">
-                <label className="label">Países destino *</label>
+                <label className="label">Países destino</label>
                 <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap' }}>
                   {["El Salvador", "Guatemala"].map(country => (
                     <label key={country} style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', background: countries.includes(country) ? 'var(--accent-soft)' : 'var(--surface-1)', padding: '9px 14px', borderRadius: '10px', border: `1px solid ${countries.includes(country) ? 'var(--accent-color)' : 'var(--border-color)'}`, fontSize: '13px', width: 'auto' }}>
@@ -3061,7 +3122,7 @@ export default function GanaPlayMainApp() {
               </div>
 
               <div className="form-group">
-                <label className="label">Prioridad *</label>
+                <label className="label">Prioridad</label>
                 <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
                   {(["Bajo", "Medio", "Alto", "Urgente"] as RequestPriority[]).map(p => (
                     <label key={p} style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', background: priority === p ? priorityConfig[p].bg : 'var(--surface-1)', padding: '9px 18px', borderRadius: '10px', border: `1px solid ${priority === p ? priorityConfig[p].text : 'var(--border-color)'}`, color: priority === p ? priorityConfig[p].text : 'var(--text-secondary)', fontWeight: priority === p ? 700 : 500, width: 'auto', fontSize: '13px' }}>
@@ -3142,8 +3203,8 @@ export default function GanaPlayMainApp() {
                   </select>
                 </div>
                 <div className="form-group">
-                  <label className="label">Fecha límite de entrega *</label>
-                  <input type="date" value={deliveryDate} onChange={(e) => setDeliveryDate(e.target.value)} required />
+                  <label className="label">Fecha límite de entrega</label>
+                  <input type="date" value={deliveryDate} onChange={(e) => setDeliveryDate(e.target.value)} />
                 </div>
               </div>
 
