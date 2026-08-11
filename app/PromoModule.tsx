@@ -19,6 +19,7 @@ import {
   Folder, FolderPlus, ChevronRight, Home, FolderInput, Link2,
 } from "lucide-react";
 import { db } from "@/lib/firebase";
+import { publicLink } from "@/lib/public-url";
 import { collection, onSnapshot, query, where } from "firebase/firestore";
 import { compressImageToDataUrl } from "@/lib/image";
 import { uploadToStorage, storageErrorMessage } from "@/lib/storage-upload";
@@ -82,7 +83,7 @@ export default function PromoModule({ role, userName, addToast }: Props) {
   const folders = children.filter(i => i.kind === "folder");
   const files = children.filter(i => i.kind === "file");
 
-  const publicUrl = config ? `${typeof window !== "undefined" ? window.location.origin : ""}/p/${config.shareCode}` : "";
+  const publicUrl = config ? publicLink(`/p/${config.shareCode}`) : "";
   const copyLink = async () => {
     if (!publicUrl) return;
     try { await navigator.clipboard.writeText(publicUrl); addToast("Link copiado. Compártelo con la empresa externa.", "success"); }
@@ -92,7 +93,7 @@ export default function PromoModule({ role, userName, addToast }: Props) {
   const copyFolderLink = async (folder: PromoItem) => {
     try {
       const code = await ensureFolderShareCode(db, folder);
-      const url = `${typeof window !== "undefined" ? window.location.origin : ""}/p/${code}`;
+      const url = publicLink(`/p/${code}`);
       try { await navigator.clipboard.writeText(url); addToast(`Link de "${folder.name}" copiado.`, "success"); }
       catch { addToast(url, "info"); }
     } catch { addToast("No se pudo generar el link de la carpeta.", "error"); }

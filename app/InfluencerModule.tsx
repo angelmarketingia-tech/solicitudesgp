@@ -25,6 +25,7 @@ import {
   CalendarDays, ExternalLink,
 } from "lucide-react";
 import { db } from "@/lib/firebase";
+import { publicLink } from "@/lib/public-url";
 import { collection, onSnapshot, query, where } from "firebase/firestore";
 import {
   Influencer, ContentItem, ContentStatus,
@@ -142,10 +143,13 @@ export default function InfluencerModule({ role, addToast }: Props) {
   };
 
   const copyLink = async (inf: Influencer) => {
-    const url = `${window.location.origin}/i/${inf.shareCode}`;
+    // Siempre la dirección PÚBLICA: si se armara con la del navegador y quien
+    // copia estuviera en una URL de despliegue de Vercel, el influencer se
+    // encontraría con un login de Vercel (ver src/lib/public-url.ts).
+    const url = publicLink(`/i/${inf.shareCode}`);
     try {
       await navigator.clipboard.writeText(url);
-      addToast("Link copiado. Compártelo con el influencer.", "success");
+      addToast(`Link copiado: ${url}`, "success");
     } catch {
       // Fallback: mostrar el link para copiar a mano.
       addToast(url, "info");
@@ -250,7 +254,7 @@ export default function InfluencerModule({ role, addToast }: Props) {
                     <button className="btn-secondary" title="Copiar link público (solo lectura)" style={{ flex: 1, padding: "6px", fontSize: "11px", borderRadius: "8px", cursor: "pointer" }} onClick={() => copyLink(inf)}>
                       <Copy size={12} /> Link
                     </button>
-                    <a href={`/i/${inf.shareCode}`} target="_blank" rel="noreferrer" title="Abrir vista pública" className="btn-secondary" style={{ padding: "6px 8px", fontSize: "11px", borderRadius: "8px", display: "inline-flex", alignItems: "center", textDecoration: "none" }}>
+                    <a href={publicLink(`/i/${inf.shareCode}`)} target="_blank" rel="noreferrer" title="Abrir vista pública" className="btn-secondary" style={{ padding: "6px 8px", fontSize: "11px", borderRadius: "8px", display: "inline-flex", alignItems: "center", textDecoration: "none" }}>
                       <ExternalLink size={12} />
                     </a>
                     {canEdit && (
