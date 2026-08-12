@@ -54,3 +54,6 @@ next-env.d.ts
 # Logs locales de túneles (no versionar)
 ngrok.log
 *.ngrok.log
+
+# Sesiones guardadas por las pruebas E2E
+e2e/.auth/

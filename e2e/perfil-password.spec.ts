@@ -7,19 +7,17 @@
  * exige E2E_ALLOW_WRITES=1 y hay que borrar la cuenta después.
  */
 import { test, expect, Page } from "@playwright/test";
+import { ficheroSesion } from "./helpers/sesion";
 
 const DESIGNER_PASS = process.env.E2E_DESIGNER_PASS || "";
 const CORREO = "david.gutierrez@ganaplay.com";
 
-test.use({ baseURL: process.env.E2E_BASE_URL || "http://localhost:3001" });
+test.use({ storageState: ficheroSesion("designer") });
 
+// Sesión ya iniciada por auth.setup.ts (ver helpers/sesion.ts).
 async function entrarComoDisenador(page: Page) {
   await page.goto("/");
-  await page.getByText("Diseñador", { exact: true }).click();
-  await page.getByRole("combobox").selectOption("Juan David");
-  await page.getByPlaceholder("••••••••••••").fill(DESIGNER_PASS);
-  await page.getByRole("button", { name: /Acceder al sistema/i }).click();
-  await expect(page.getByRole("heading", { name: /Solicitudes de diseño/i })).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByRole("heading", { name: /Solicitudes de diseño/i })).toBeVisible({ timeout: 30_000 });
 }
 
 async function abrirPerfil(page: Page) {
@@ -53,7 +51,10 @@ test("rechaza una contraseña actual equivocada", async ({ page }) => {
   await f.nueva.fill("NuevaClave2026");
   await f.repetir.fill("NuevaClave2026");
   await f.guardar.click();
-  await expect(page.getByText(/La contraseña actual no es correcta/i)).toBeVisible({ timeout: 20_000 });
+  // Firebase bloquea temporalmente tras varios intentos fallidos, y en una
+  // suite completa eso puede tocar aquí. Ambos mensajes significan lo mismo:
+  // la contraseña NO se cambió.
+  await expect(page.getByText(/La contraseña actual no es correcta|Demasiados intentos/i)).toBeVisible({ timeout: 20_000 });
 });
 
 test("avisa si la nueva contraseña no coincide", async ({ page }) => {

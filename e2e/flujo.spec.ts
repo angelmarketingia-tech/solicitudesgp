@@ -1,16 +1,17 @@
 import { test, expect, Page } from "@playwright/test";
+import { ficheroSesion } from "./helpers/sesion";
 
-const ADMIN_PASS = process.env.E2E_ADMIN_PASS || "angel2026";
+const ADMIN_PASS = process.env.E2E_ADMIN_PASS || "";
 
+// La sesión la abre auth.setup.ts una sola vez (ver helpers/sesion.ts):
+// aquí basta con abrir el tablero. Antes cada prueba hacía su propio login
+// y el límite de 15 intentos/minuto de /api/auth tumbaba la suite entera.
 async function loginAsAdmin(page: Page) {
   await page.goto("/");
-  await page.getByText("Trafficker").click();
-  await page.getByPlaceholder("••••••••••••").fill(ADMIN_PASS);
-  await page.getByRole("button", { name: /Acceder al sistema/i }).click();
-  await expect(
-    page.getByRole("heading", { name: /Solicitudes de diseño/i })
-  ).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByRole("heading", { name: /Solicitudes de diseño/i })).toBeVisible({ timeout: 30_000 });
 }
+
+test.use({ storageState: ficheroSesion("admin") });
 
 test.describe("Flujo del tablero", () => {
   test("el Trafficker puede abrir el formulario de nueva solicitud", async ({ page }) => {
@@ -57,13 +58,9 @@ test.describe("Flujo del tablero", () => {
 });
 
 test.describe("Centro de Diseño", () => {
+  test.use({ storageState: ficheroSesion("designer") });
   test("un diseñador accede a su Centro de Diseño", async ({ page }) => {
-    const PASS = process.env.E2E_GENERAL_PASS || "ganaplay2026";
     await page.goto("/");
-    await page.getByText("Diseñador").click();
-    await page.locator("select").selectOption("Juan David");
-    await page.getByPlaceholder("••••••••••••").fill(PASS);
-    await page.getByRole("button", { name: /Acceder al sistema/i }).click();
     await expect(
       page.getByText("¿Quién está trabajando en qué?")
     ).toBeVisible({ timeout: 20_000 });
@@ -71,12 +68,9 @@ test.describe("Centro de Diseño", () => {
 });
 
 test.describe("Perfil Community Manager", () => {
+  test.use({ storageState: ficheroSesion("cm") });
   test("la nueva solicitud viene preseleccionada para Community", async ({ page }) => {
-    const PASS = process.env.E2E_GENERAL_PASS || "ganaplay2026";
     await page.goto("/");
-    await page.getByText("Community Manager").click();
-    await page.getByPlaceholder("••••••••••••").fill(PASS);
-    await page.getByRole("button", { name: /Acceder al sistema/i }).click();
     await expect(
       page.getByRole("heading", { name: /Solicitudes de diseño/i })
     ).toBeVisible({ timeout: 20_000 });
@@ -86,6 +80,8 @@ test.describe("Perfil Community Manager", () => {
     ).toBeVisible();
     // Nombre y correo del solicitante vienen preseleccionados.
     await expect(page.getByPlaceholder("Tu nombre")).toHaveValue("Community Manager");
-    await expect(page.getByPlaceholder("nombre@ganaplay.com")).toHaveValue("Fernanda.Monrroy@ganaplay.com");
+    // El campo de correo pasó a ser una lista de destinatarios ya elegidos:
+    // se comprueba que el del CM esté entre ellos.
+    await expect(page.getByText(/fernanda.monrroy@ganaplay.com/i).first()).toBeVisible();
   });
 });

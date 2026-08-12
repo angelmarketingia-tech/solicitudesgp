@@ -4,6 +4,7 @@
  * Solo lectura.
  */
 import { test, expect } from "@playwright/test";
+import { ficheroSesion } from "./helpers/sesion";
 
 test.use({
   baseURL: process.env.E2E_BASE_URL || "https://solicitudes.ganaplay.lat",
@@ -41,20 +42,18 @@ test("al pulsar una pieza se ve el detalle de lo que tiene que hacer", async ({ 
   console.log((await page.locator(".card").last().innerText()).slice(0, 500));
 });
 
-test("el link que copia el CM es SIEMPRE el público, no el del navegador", async ({ page }) => {
-  const base = process.env.E2E_APP_URL || "";
-  const pass = process.env.E2E_GENERAL_PASS || "";
-  test.skip(!base || !pass, "Faltan E2E_APP_URL y E2E_GENERAL_PASS");
+test("el link que copia el CM es SIEMPRE el público, no el del navegador", async ({ browser }) => {
+  test.skip(!process.env.E2E_GENERAL_PASS, "Falta E2E_GENERAL_PASS");
 
-  // A propósito se entra por una dirección NO pública (localhost): antes el
-  // link copiado heredaba ese origen y no servía fuera de esta máquina.
-  await page.goto(base);
-  await page.evaluate(() => { localStorage.clear(); sessionStorage.clear(); });
-  await page.reload();
-  await page.getByText("Community Manager", { exact: true }).click();
-  await page.getByPlaceholder("••••••••••••").fill(pass);
-  await page.getByRole("button", { name: /Acceder al sistema/i }).click();
-  await expect(page.getByRole("heading", { name: /Solicitudes de diseño/i })).toBeVisible({ timeout: 20_000 });
+  // A propósito se abre por la dirección local, NO pública: antes el link
+  // copiado heredaba ese origen y no servía fuera de esta máquina.
+  const ctx = await browser.newContext({
+    storageState: ficheroSesion("cm"),
+    baseURL: process.env.E2E_APP_URL || "http://localhost:3000",
+  });
+  const page = await ctx.newPage();
+  await page.goto("/");
+  await expect(page.getByRole("heading", { name: /Solicitudes de diseño/i })).toBeVisible({ timeout: 30_000 });
 
   await page.getByText("Contenido Influencers", { exact: true }).click();
 
@@ -72,12 +71,13 @@ test("el link que copia el CM es SIEMPRE el público, no el del navegador", asyn
   expect(url).toContain("/i/");
 
   // Y ese link, abierto sin sesión, muestra el calendario.
-  const limpio = await page.context().browser()!.newContext();
+  const limpio = await browser.newContext();
   const p2 = await limpio.newPage();
   await p2.goto(url);
   await expect(p2.getByText(/Vista de solo lectura/i)).toBeVisible({ timeout: 25_000 });
   console.log("ABIERTO SIN SESIÓN:", (await p2.locator("body").innerText()).split("\n")[0]);
   await limpio.close();
+  await ctx.close();
 });
 
 test("una influencer sin contenido asignado ve el aviso, no un error", async ({ page }) => {

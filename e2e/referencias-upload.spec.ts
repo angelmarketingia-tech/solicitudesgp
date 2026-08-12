@@ -10,20 +10,20 @@
  * pásale `E2E_BASE_URL` si tu dev no está en el 3001.
  */
 import { test, expect, Page } from "@playwright/test";
+import { ficheroSesion } from "./helpers/sesion";
 
-const ADMIN_PASS = process.env.E2E_ADMIN_PASS || "angel2026";
+const ADMIN_PASS = process.env.E2E_ADMIN_PASS || "";
 
-test.use({ baseURL: process.env.E2E_BASE_URL || "http://localhost:3001" });
 
+// La sesión la abre auth.setup.ts una sola vez (ver helpers/sesion.ts):
+// aquí basta con abrir el tablero. Antes cada prueba hacía su propio login
+// y el límite de 15 intentos/minuto de /api/auth tumbaba la suite entera.
 async function loginAsAdmin(page: Page) {
   await page.goto("/");
-  await page.getByText("Trafficker").click();
-  await page.getByPlaceholder("••••••••••••").fill(ADMIN_PASS);
-  await page.getByRole("button", { name: /Acceder al sistema/i }).click();
-  await expect(
-    page.getByRole("heading", { name: /Solicitudes de diseño/i })
-  ).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByRole("heading", { name: /Solicitudes de diseño/i })).toBeVisible({ timeout: 30_000 });
 }
+
+test.use({ storageState: ficheroSesion("admin") });
 
 test("una referencia Word de 2.3 MB se adjunta sin errores", async ({ page }) => {
   test.setTimeout(180_000);

@@ -1,4 +1,5 @@
 import { test, expect, Page } from "@playwright/test";
+import { ficheroSesion } from "./helpers/sesion";
 import path from "path";
 import fs from "fs";
 
@@ -21,17 +22,18 @@ import fs from "fs";
  *  - Una imagen de prueba en /logo (usa el logo verde por defecto).
  */
 
-const PASS = process.env.E2E_GENERAL_PASS || "ganaplay2026";
+const PASS = process.env.E2E_GENERAL_PASS || "";
 const LIVE = process.env.E2E_LIVE === "1";
 
+// La sesión la abre auth.setup.ts una sola vez (ver helpers/sesion.ts):
+// aquí basta con abrir el tablero. Antes cada prueba hacía su propio login
+// y el límite de 15 intentos/minuto de /api/auth tumbaba la suite entera.
 async function loginAsDesigner(page: Page) {
   await page.goto("/");
-  await page.getByText("Diseñador").click();
-  await page.locator("select").selectOption("Juan David");
-  await page.getByPlaceholder("••••••••••••").fill(PASS);
-  await page.getByRole("button", { name: /Acceder al sistema/i }).click();
-  await expect(page.getByText("¿Quién está trabajando en qué?")).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByRole("heading", { name: /Solicitudes de diseño/i })).toBeVisible({ timeout: 30_000 });
 }
+
+test.use({ storageState: ficheroSesion("designer") });
 
 test.describe("IA Andromeda — verificación LIVE con proveedor real", () => {
   test.skip(!LIVE, "Activa con E2E_LIVE=1 para correr contra OpenAI real.");
@@ -54,14 +56,14 @@ test.describe("IA Andromeda — verificación LIVE con proveedor real", () => {
       return;
     }
 
-    await page.locator('input[type="file"][accept="image/*"]').first().setInputFiles(imagePath);
+    await page.locator('input[type="file"][accept="image/*"]').last().setInputFiles(imagePath);
     await expect(page.getByText(/Imagen lista para analizar/)).toBeVisible({ timeout: 15_000 });
 
     await page.getByPlaceholder("Pregunta o sube un diseño...").fill(
       "Analiza esta pieza para Meta Ads Feed cuadrado. Dame scoring y 3 mejoras concretas."
     );
 
-    await page.getByRole("button").filter({ has: page.locator("svg") }).last().click();
+    await page.getByRole("button", { name: "Enviar mensaje al chat" }).click();
 
     // Aparece estado "Analizando imagen…"
     await expect(page.getByText(/Analizando imagen…/i)).toBeVisible({ timeout: 5_000 }).catch(() => undefined);

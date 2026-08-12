@@ -1,4 +1,5 @@
 import { test, expect, Page } from "@playwright/test";
+import { ficheroSesion } from "./helpers/sesion";
 import path from "path";
 
 /**
@@ -15,36 +16,37 @@ import path from "path";
  * y limpian lo que crean. Sin esa variable, se omiten (skip) y el resto corre.
  */
 
-const ADMIN_PASS = process.env.E2E_ADMIN_PASS || "angel2026";
-const GENERAL_PASS = process.env.E2E_GENERAL_PASS || "ganaplay2026";
+const ADMIN_PASS = process.env.E2E_ADMIN_PASS || "";
+const GENERAL_PASS = process.env.E2E_GENERAL_PASS || "";
 const RUN_UPLOAD = process.env.RUN_UPLOAD === "1";
 
 const VIDEO = path.join(__dirname, "fixtures", "test-video.mp4");
 const IMAGE = path.join(__dirname, "fixtures", "test-image.png");
 
+// La sesión la abre auth.setup.ts una sola vez (ver helpers/sesion.ts):
+// aquí basta con abrir el tablero. Antes cada prueba hacía su propio login
+// y el límite de 15 intentos/minuto de /api/auth tumbaba la suite entera.
 async function loginAsDesigner(page: Page) {
   await page.goto("/");
-  await page.getByText("Diseñador").click();
-  await page.locator("select").selectOption("Juan David");
-  await page.getByPlaceholder("••••••••••••").fill(GENERAL_PASS);
-  await page.getByRole("button", { name: /Acceder al sistema/i }).click();
-  await expect(page.getByRole("heading", { name: /Solicitudes de diseño/i }))
-    .toBeVisible({ timeout: 20_000 });
+  await expect(page.getByRole("heading", { name: /Solicitudes de diseño/i })).toBeVisible({ timeout: 30_000 });
 }
 
-async function loginAsAdmin(page: Page) {
+// El admin entra con SU sesión guardada, en su propio contexto: este fichero
+// corre con la sesión de diseñador.
+async function paginaComoAdmin(browser: import("@playwright/test").Browser) {
+  const ctx = await browser.newContext({ storageState: ficheroSesion("admin") });
+  const page = await ctx.newPage();
   await page.goto("/");
-  await page.getByText("Trafficker").click();
-  await page.getByPlaceholder("••••••••••••").fill(ADMIN_PASS);
-  await page.getByRole("button", { name: /Acceder al sistema/i }).click();
-  await expect(page.getByRole("heading", { name: /Solicitudes de diseño/i }))
-    .toBeVisible({ timeout: 20_000 });
+  await expect(page.getByRole("heading", { name: /Solicitudes de diseño/i })).toBeVisible({ timeout: 30_000 });
+  return { ctx, page };
 }
 
 async function openSocialTab(page: Page) {
   await page.getByText("Redes Sociales", { exact: true }).click();
   await expect(page.getByText("Calendario de Redes Sociales")).toBeVisible({ timeout: 15_000 });
 }
+
+test.use({ storageState: ficheroSesion("designer") });
 
 test.describe("Redes Sociales — navegación y calendario", () => {
   test("el tab aparece y abre el calendario", async ({ page }) => {
@@ -176,8 +178,8 @@ test.describe("Redes Sociales — diseñador (gestión)", () => {
 });
 
 test.describe("Redes Sociales — permisos (solo lectura)", () => {
-  test("el Trafficker (admin) ve el calendario pero NO botones de gestión", async ({ page }) => {
-    await loginAsAdmin(page);
+  test("el Trafficker (admin) ve el calendario pero NO botones de gestión", async ({ browser }) => {
+    const { ctx, page } = await paginaComoAdmin(browser);
     await openSocialTab(page);
     // Aviso de solo lectura
     await expect(page.getByText(/solo lectura/i)).toBeVisible();
@@ -185,5 +187,6 @@ test.describe("Redes Sociales — permisos (solo lectura)", () => {
     await page.getByRole("button", { name: "14", exact: true }).click();
     await expect(page.getByRole("button", { name: /Nueva carpeta/i })).toHaveCount(0);
     await expect(page.getByRole("button", { name: /Subir archivos/i })).toHaveCount(0);
+    await ctx.close();
   });
 });

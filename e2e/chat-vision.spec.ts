@@ -1,4 +1,5 @@
 import { test, expect, Page, Route } from "@playwright/test";
+import { ficheroSesion } from "./helpers/sesion";
 
 /**
  * E2E del chat IA Andromeda con imagen.
@@ -18,20 +19,21 @@ import { test, expect, Page, Route } from "@playwright/test";
  * Si la pass no es válida en el entorno, el test se salta con .skip().
  */
 
-const PASS = process.env.E2E_GENERAL_PASS || "ganaplay2026";
+const PASS = process.env.E2E_GENERAL_PASS || "";
 
 // PNG transparente 1×1 (base64 mínimo válido para un input file).
 const TINY_PNG_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=";
 
+// La sesión la abre auth.setup.ts una sola vez (ver helpers/sesion.ts):
+// aquí basta con abrir el tablero. Antes cada prueba hacía su propio login
+// y el límite de 15 intentos/minuto de /api/auth tumbaba la suite entera.
 async function loginAsDesigner(page: Page) {
   await page.goto("/");
-  await page.getByText("Diseñador").click();
-  await page.locator("select").selectOption("Juan David");
-  await page.getByPlaceholder("••••••••••••").fill(PASS);
-  await page.getByRole("button", { name: /Acceder al sistema/i }).click();
-  await expect(page.getByText("¿Quién está trabajando en qué?")).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByRole("heading", { name: /Solicitudes de diseño/i })).toBeVisible({ timeout: 30_000 });
 }
+
+test.use({ storageState: ficheroSesion("designer") });
 
 test.describe("IA Andromeda — análisis con imagen", () => {
   test("envía imagen y recibe feedback estructurado (sin decir 'no puedo ver')", async ({ page }) => {
@@ -77,11 +79,11 @@ test.describe("IA Andromeda — análisis con imagen", () => {
 
     // Abrir el chat (botón flotante)
     await page.getByLabel("Abrir chat IA Andromeda").click();
-    await expect(page.getByText("IA Andromeda")).toBeVisible();
+    await expect(page.getByText("IA Andromeda", { exact: true }).first()).toBeVisible();
 
     // Subir imagen
     const buffer = Buffer.from(TINY_PNG_BASE64, "base64");
-    const fileInput = page.locator('input[type="file"][accept="image/*"]').first();
+    const fileInput = page.locator('input[type="file"][accept="image/*"]').last();
     await fileInput.setInputFiles({
       name: "test-creative.png",
       mimeType: "image/png",
@@ -93,7 +95,7 @@ test.describe("IA Andromeda — análisis con imagen", () => {
 
     // Escribir y enviar
     await page.getByPlaceholder("Pregunta o sube un diseño...").fill("Dame feedback");
-    const sendBtn = page.getByRole("button").filter({ has: page.locator("svg") }).last();
+    const sendBtn = page.getByRole("button", { name: "Enviar mensaje al chat" });
     await sendBtn.click();
     // Doble click rápido (debe ignorarse por el flag chatLoading).
     await sendBtn.click().catch(() => undefined);
@@ -146,7 +148,7 @@ test.describe("IA Andromeda — análisis con imagen", () => {
     await expect(page.getByText(/sin visión/)).toBeVisible({ timeout: 10_000 });
 
     const buffer = Buffer.from(TINY_PNG_BASE64, "base64");
-    await page.locator('input[type="file"][accept="image/*"]').first().setInputFiles({
+    await page.locator('input[type="file"][accept="image/*"]').last().setInputFiles({
       name: "x.png",
       mimeType: "image/png",
       buffer,

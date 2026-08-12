@@ -121,6 +121,35 @@ function esSolicitudDelTrafficker(req: { requesterName?: string }): boolean {
   return n.startsWith("traf") || n.startsWith("tarf") || n.includes("angel");
 }
 
+/**
+ * Copia local del tablero, para que se vea algo si Firestore no responde.
+ *
+ * OJO: guardaba las solicitudes ENTERAS. Con las piezas y las referencias en
+ * base64 dentro, el JSON supera de largo la cuota de localStorage (~5 MB), así
+ * que el navegador lo rechazaba y el `catch` vacío se lo tragaba: la copia
+ * NUNCA llegó a existir, y encima se intentaba en cada actualización, pagando
+ * un JSON.stringify de varios MB cada vez.
+ *
+ * Ahora se guarda una versión ligera: los campos que el tablero necesita para
+ * pintar las tarjetas, sin los adjuntos. Al recuperarla se ven las solicitudes
+ * y, en cuanto Firestore responde, se completan con sus archivos.
+ */
+function guardarCopiaLocal(data: RequestType[]) {
+  try {
+    const ligero = data.slice(0, 400).map(r => ({
+      ...r,
+      creatives: [], messages: [], history: [],
+      referenceImages: [], referenceFiles: [],
+      referenceImage: undefined,
+    }));
+    localStorage.setItem('gp_requests_backup', JSON.stringify(ligero));
+  } catch (e) {
+    // Si aun así no cabe, se descarta la copia anterior para no dejarla vieja.
+    try { localStorage.removeItem('gp_requests_backup'); } catch { /* */ }
+    console.warn('[tablero] no se pudo guardar la copia local:', e);
+  }
+}
+
 // Preselección por perfil: área y nombre del solicitante.
 const PROFILE_DEFAULTS: Record<string, { area: string; requesterName: string }> = {
   admin:          { area: "Pauta",          requesterName: "Trafficker" },
@@ -463,7 +492,7 @@ export default function GanaPlayMainApp() {
         .filter(r => !r.board);
       setRequests(data);
       setLoadingData(false);
-      try { localStorage.setItem('gp_requests_backup', JSON.stringify(data)); } catch {}
+      guardarCopiaLocal(data);
     }, (err) => {
       console.error("Firebase error:", err);
       setLoadingData(false);
@@ -1865,10 +1894,15 @@ export default function GanaPlayMainApp() {
           const personal = await entrarConPersonal(correo, loginPass);
           if (personal.ok && personal.idToken) {
             ({ res, data } = await pedirSesion({ idToken: personal.idToken, role: loginRole }));
-          } else if (!personal.ok && personal.error !== 'sin-cuenta') {
+          } else if (!personal.ok && personal.error !== 'sin-cuenta'
+                     && personal.code !== 'auth/too-many-requests') {
             setLoginError("❌ " + personal.error);
             return;
           }
+          // Si Firebase bloquea por intentos, NO se enseña ese aviso: quien
+          // usa la contraseña compartida se llevaría un "Demasiados intentos"
+          // que no tiene nada que ver con lo que escribió. Se sigue adelante y
+          // se muestra el error real del servidor (contraseña incorrecta).
         }
       }
 
@@ -2224,8 +2258,11 @@ export default function GanaPlayMainApp() {
           </h2>
         </div>
 
-        {/* NAV TABS */}
-        <div style={{ display: 'flex', gap: '6px', marginBottom: '22px', borderBottom: '1px solid var(--border-color)', paddingBottom: '14px', flexWrap: 'wrap' }}>
+        {/* NAV TABS — `data-testid` para que las pruebas comprueben qué
+            secciones ve cada perfil sin confundirse con textos iguales que
+            aparecen en otras partes de la pantalla (p. ej. "Pendientes"
+            también es una estadística del Centro de Diseño). */}
+        <div data-testid="menu-principal" style={{ display: 'flex', gap: '6px', marginBottom: '22px', borderBottom: '1px solid var(--border-color)', paddingBottom: '14px', flexWrap: 'wrap' }}>
           <div style={navItemStyle(activeTab === 'Tablero Kanban')} onClick={() => setActiveTab('Tablero Kanban')}><Calendar size={15} /> Planeación</div>
           <div style={navItemStyle(activeTab === 'Calendario Entrega')} onClick={() => setActiveTab('Calendario Entrega')}><Layout size={15} /> Por estado</div>
           {(role === 'admin' || role === 'cm' || role === 'operator' || role === 'administrative') && (
@@ -2888,7 +2925,7 @@ export default function GanaPlayMainApp() {
                 </label>
                 <input type="text" value={chatInput} onChange={(e) => setChatInput(e.target.value)}
                   onKeyDown={(e) => e.key === 'Enter' && sendChatMessage()} placeholder="Pregunta o sube un diseño..." style={{ flexGrow: 1, fontSize: '13px' }} />
-                <button onClick={sendChatMessage} className="btn" style={{ padding: '10px' }} disabled={chatLoading}><Send size={18} /></button>
+                <button aria-label="Enviar mensaje al chat" onClick={sendChatMessage} className="btn" style={{ padding: '10px' }} disabled={chatLoading}><Send size={18} /></button>
               </div>
             </div>
           )}
