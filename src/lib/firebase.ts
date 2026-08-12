@@ -1,5 +1,5 @@
 import { initializeApp } from "firebase/app";
-import { getFirestore } from "firebase/firestore";
+import { initializeFirestore } from "firebase/firestore";
 import { getStorage } from "firebase/storage";
 import { getAuth } from "firebase/auth";
 
@@ -13,7 +13,19 @@ const firebaseConfig = {
 };
 
 const app = initializeApp(firebaseConfig);
-export const db = getFirestore(app);
+
+/**
+ * Firestore habla por WebChannel (streaming). En algunas redes móviles y
+ * proveedores lo bloquean o lo dejan a medias: la conexión no falla, se queda
+ * colgada, y la app se queda cargando para siempre sin error. Nos pasó con una
+ * influencer en El Salvador mientras aquí abría sin problema.
+ *
+ * `experimentalAutoDetectLongPolling` detecta esas redes y cambia solo a
+ * peticiones normales (long polling), que atraviesan cualquier proxy.
+ */
+export const db = initializeFirestore(app, {
+  experimentalAutoDetectLongPolling: true,
+});
 // Firebase Authentication: se usa SOLO para que cada persona tenga su propia
 // contraseña (crearla, cambiarla y recuperarla). El rol NO sale de aquí: lo
 // sigue resolviendo el servidor a partir del correo, en /api/auth.

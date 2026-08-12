@@ -11,7 +11,7 @@
  */
 
 import React, { use, useEffect, useMemo, useState } from "react";
-import { ChevronLeft, ChevronRight, CalendarDays, X, Lock } from "lucide-react";
+import { ChevronLeft, ChevronRight, CalendarDays, X, Lock, WifiOff } from "lucide-react";
 import { db } from "@/lib/firebase";
 import { collection, onSnapshot, query, where } from "firebase/firestore";
 import {
@@ -24,6 +24,10 @@ export default function PublicInfluencerPage({ params }: { params: Promise<{ cod
   const { code } = use(params);
 
   const [loading, setLoading] = useState(true);
+  // Si la conexión se queda colgada (redes que bloquean el streaming de
+  // Firestore), la página mostraba un gris eterno sin explicación. Pasados
+  // unos segundos se avisa y se ofrece reintentar.
+  const [sinConexion, setSinConexion] = useState(false);
   const [influencer, setInfluencer] = useState<Influencer | null>(null);
   const [items, setItems] = useState<ContentItem[]>([]);
   const [detail, setDetail] = useState<ContentItem | null>(null);
@@ -36,12 +40,28 @@ export default function PublicInfluencerPage({ params }: { params: Promise<{ cod
   useEffect(() => {
     if (!code) return;
     const qy = query(collection(db, "requests"), where("shareCode", "==", code));
+    // Vigilancia: Firestore puede no responder NI dar error si la red bloquea
+    // su conexión de streaming. Sin esto, la espera es infinita.
+    const vigilante = setTimeout(() => setSinConexion(true), 15_000);
     const unsub = onSnapshot(qy, (snap) => {
       const found = snap.docs.find(d => d.data().board === "influencer");
+      // OJO: sin red, Firestore responde igualmente con lo que tenga en caché
+      // (vacío). Dar eso por bueno hacía que un enlace CORRECTO se anunciara
+      // como "Enlace no válido". Si no hay nada y la respuesta no vino del
+      // servidor, es un problema de conexión, no un enlace malo.
+      if (!found && snap.metadata.fromCache) { clearTimeout(vigilante); setSinConexion(true); return; }
+      clearTimeout(vigilante);
+      setSinConexion(false);
       setInfluencer(found ? influencerFromDoc(found.id, found.data()) : null);
       setLoading(false);
-    }, () => setLoading(false));
-    return () => unsub();
+    }, () => {
+      // Un fallo de red NO es un enlace inválido: decirle a alguien de fuera
+      // que su link no sirve, cuando lo que falla es su conexión, la deja sin
+      // saber qué hacer (y culpando al link).
+      clearTimeout(vigilante);
+      setSinConexion(true);
+    });
+    return () => { clearTimeout(vigilante); unsub(); };
   }, [code]);
 
   // 2) Cargar sus tarjetas de contenido.
@@ -74,11 +94,32 @@ export default function PublicInfluencerPage({ params }: { params: Promise<{ cod
   const nextMonth = () => { const m = viewM + 1; if (m > 11) { setViewM(0); setViewY(viewY + 1); } else setViewM(m); };
   const todayStr = today.toISOString().split("T")[0];
 
+  if (loading && sinConexion) {
+    return (
+      <div style={{ maxWidth: "480px", margin: "0 auto", padding: "70px 20px", textAlign: "center" }}>
+        <WifiOff size={44} style={{ opacity: 0.45, marginBottom: "14px" }} />
+        <h1 style={{ fontSize: "20px", color: "var(--text-primary)", margin: "0 0 10px" }}>
+          No pudimos cargar tu calendario
+        </h1>
+        <p style={{ fontSize: "14px", color: "var(--text-secondary)", lineHeight: 1.6, margin: "0 0 22px" }}>
+          Parece un problema de conexión. Prueba con datos móviles si estás en wifi
+          (o al revés), o ábrelo en Chrome o Safari en vez de dentro de WhatsApp.
+        </p>
+        <button className="btn" onClick={() => window.location.reload()} style={{ padding: "12px 22px" }}>
+          Reintentar
+        </button>
+      </div>
+    );
+  }
+
   if (loading) {
     return (
       <div style={{ maxWidth: "1100px", margin: "0 auto", padding: "40px 16px" }}>
         <div className="skeleton" style={{ height: "60px", marginBottom: "16px" }} />
         <div className="skeleton" style={{ height: "420px" }} />
+        <p style={{ textAlign: "center", fontSize: "13px", color: "var(--text-muted)", marginTop: "18px" }}>
+          Cargando tu calendario de contenido…
+        </p>
       </div>
     );
   }

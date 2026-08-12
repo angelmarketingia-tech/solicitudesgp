@@ -9,7 +9,11 @@
 import { test, expect } from "@playwright/test";
 import { entrar, passwordDe, faltaPassword, CREDENCIALES } from "./helpers/sesion";
 
-test.describe.configure({ mode: "serial" });
+// Un reintento: estas pruebas compiten con el límite de intentos de /api/auth
+// y con el bloqueo temporal de Firebase, que a plena carga pueden retrasar la
+// respuesta. El reintento absorbe eso sin tapar un fallo real (si el acceso
+// estuviera roto, fallaría también en el segundo intento).
+test.describe.configure({ mode: "serial", retries: 1 });
 test.use({ storageState: { cookies: [], origins: [] } });
 
 const tablero = /Solicitudes de diseño/i;

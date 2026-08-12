@@ -14,7 +14,7 @@
 import React, { use, useEffect, useMemo, useState } from "react";
 import {
   Download, MessageSquare, Send, FileText, Image as ImageIcon, Lock, Megaphone,
-  FileArchive, Folder, ChevronRight, Home,
+  FileArchive, Folder, ChevronRight, Home, WifiOff,
 } from "lucide-react";
 import { db } from "@/lib/firebase";
 import { collection, onSnapshot, query, where } from "firebase/firestore";
@@ -30,6 +30,10 @@ export default function PublicPromoPage({ params }: { params: Promise<{ code: st
   const { code } = use(params);
 
   const [loading, setLoading] = useState(true);
+  // Igual que en el calendario de influencers: si la red bloquea el streaming
+  // de Firestore, la conexión se cuelga sin dar error y la página se queda en
+  // gris para siempre. Se avisa y se ofrece reintentar.
+  const [sinConexion, setSinConexion] = useState(false);
   const [scope, setScope] = useState<Scope | "invalid" | null>(null);
   const [items, setItems] = useState<PromoItem[]>([]);
   const [currentId, setCurrentId] = useState<string>(PROMO_ROOT);
@@ -45,12 +49,18 @@ export default function PublicPromoPage({ params }: { params: Promise<{ code: st
   useEffect(() => {
     if (!code) return;
     const qy = query(collection(db, "requests"), where("shareCode", "==", code));
+    const vigilante = setTimeout(() => setSinConexion(true), 15_000);
     const unsub = onSnapshot(qy, (snap) => {
+      clearTimeout(vigilante);
+      setSinConexion(false);
       const docSnap = snap.docs.find(d => {
         const b = d.data().board;
         return b === "promo_config" || (b === "promo" && d.data().kind === "folder");
       });
-      if (!docSnap) { setScope("invalid"); setLoading(false); return; }
+      // Sin red, Firestore responde desde su caché (vacía): eso no significa
+      // que el enlace sea malo, sino que no hubo conexión.
+      if (!docSnap && snap.metadata.fromCache) { clearTimeout(vigilante); setSinConexion(true); return; }
+      if (!docSnap) { clearTimeout(vigilante); setScope("invalid"); setLoading(false); return; }
       const data = docSnap.data();
       if (data.board === "promo_config") {
         const cfg = configFromDoc(docSnap.id, data);
@@ -60,7 +70,11 @@ export default function PublicPromoPage({ params }: { params: Promise<{ code: st
         setScope({ rootId: f.id, name: f.name, isRoot: false, general: f.messages });
       }
       setLoading(false);
-    }, () => { setScope("invalid"); setLoading(false); });
+    }, () => {
+      // Fallo de red, no enlace inválido: se avisa de la conexión.
+      clearTimeout(vigilante);
+      setSinConexion(true);
+    });
     return () => unsub();
   }, [code]);
 
@@ -125,6 +139,24 @@ export default function PublicPromoPage({ params }: { params: Promise<{ code: st
     setCommentInputs(s => ({ ...s, [id]: "" }));
     try { await addPromoComment(db, id, buildComment(name, text, "public")); } catch { setCommentInputs(s => ({ ...s, [id]: text })); }
   };
+
+  if (loading && sinConexion) {
+    return (
+      <div style={{ maxWidth: "480px", margin: "0 auto", padding: "70px 20px", textAlign: "center" }}>
+        <WifiOff size={44} style={{ opacity: 0.45, marginBottom: "14px" }} />
+        <h1 style={{ fontSize: "20px", color: "var(--text-primary)", margin: "0 0 10px" }}>
+          No pudimos cargar los archivos
+        </h1>
+        <p style={{ fontSize: "14px", color: "var(--text-secondary)", lineHeight: 1.6, margin: "0 0 22px" }}>
+          Parece un problema de conexión. Prueba con datos móviles si estás en wifi
+          (o al revés), o ábrelo en Chrome o Safari en vez de dentro de WhatsApp.
+        </p>
+        <button className="btn" onClick={() => window.location.reload()} style={{ padding: "12px 22px" }}>
+          Reintentar
+        </button>
+      </div>
+    );
+  }
 
   if (loading) {
     return (
