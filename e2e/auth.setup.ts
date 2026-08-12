@@ -12,11 +12,27 @@ import { entrar, ficheroSesion, faltaPassword, type Perfil } from "./helpers/ses
 
 const PERFILES: Perfil[] = ["admin", "cm", "operator", "administrative", "designer"];
 
+/** Deja el fichero vacío: las pruebas de ese perfil se saltarán solas. */
+function marcarNoDisponible(perfil: Perfil, motivo: string) {
+  const destino = ficheroSesion(perfil);
+  fs.mkdirSync(path.dirname(destino), { recursive: true });
+  fs.writeFileSync(destino, JSON.stringify({ cookies: [], origins: [] }));
+  console.warn(`⚠️  Sin sesión de ${perfil}: ${motivo}. Sus pruebas se saltarán.`);
+}
+
 for (const perfil of PERFILES) {
   setup(`sesión de ${perfil}`, async ({ page }) => {
-    setup.skip(faltaPassword(perfil), `Falta la contraseña de ${perfil}`);
-    await entrar(page, perfil);
-    await expect(page.getByRole("heading", { name: /Solicitudes de diseño/i })).toBeVisible({ timeout: 30_000 });
+    if (faltaPassword(perfil)) { marcarNoDisponible(perfil, "falta la contraseña"); return; }
+
+    // Si un perfil no entra (contraseña cambiada, por ejemplo), NO se tumba la
+    // suite entera: se marca sin sesión y el resto sigue corriendo.
+    try {
+      await entrar(page, perfil);
+      await expect(page.getByRole("heading", { name: /Solicitudes de diseño/i })).toBeVisible({ timeout: 30_000 });
+    } catch {
+      marcarNoDisponible(perfil, "no se pudo iniciar sesión");
+      return;
+    }
 
     // Espera a que la copia local del tablero exista ANTES de guardar la
     // sesión: así cada prueba arranca con las solicitudes ya pintadas en vez

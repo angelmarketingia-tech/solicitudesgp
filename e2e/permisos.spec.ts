@@ -6,7 +6,7 @@
  * salta. Solo lectura: ninguna prueba de este archivo escribe nada.
  */
 import { test, expect, type Page } from "@playwright/test";
-import { ficheroSesion, faltaPassword, type Perfil } from "./helpers/sesion";
+import { ficheroSesion, sesionDisponible, type Perfil } from "./helpers/sesion";
 
 /** Lo que cada perfil DEBE y NO DEBE ver en el menú. */
 const MATRIZ: Record<Perfil, { ve: string[]; noVe: string[] }> = {
@@ -43,7 +43,7 @@ for (const perfil of Object.keys(MATRIZ) as Perfil[]) {
     test.use({ storageState: ficheroSesion(perfil) });
 
     test(`ve exactamente sus secciones`, async ({ page }) => {
-      test.skip(faltaPassword(perfil), `Falta la contraseña de ${perfil}`);
+      test.skip(!sesionDisponible(perfil), `Sin sesión de ${perfil}`);
       await abrirTablero(page);
       const menu = page.getByTestId("menu-principal");
       for (const seccion of MATRIZ[perfil].ve) {
@@ -55,7 +55,7 @@ for (const perfil of Object.keys(MATRIZ) as Perfil[]) {
     });
 
     test(`la IA Andromeda solo la tiene Diseño`, async ({ page }) => {
-      test.skip(faltaPassword(perfil), `Falta la contraseña de ${perfil}`);
+      test.skip(!sesionDisponible(perfil), `Sin sesión de ${perfil}`);
       await abrirTablero(page);
       const boton = page.getByRole("button", { name: /Abrir chat IA Andromeda/i });
       if (perfil === "designer") await expect(boton).toBeVisible();
@@ -63,7 +63,7 @@ for (const perfil of Object.keys(MATRIZ) as Perfil[]) {
     });
 
     test(`"Eliminar permanentemente" solo lo tiene el Trafficker`, async ({ page }) => {
-      test.skip(faltaPassword(perfil), `Falta la contraseña de ${perfil}`);
+      test.skip(!sesionDisponible(perfil), `Sin sesión de ${perfil}`);
       await abrirTablero(page);
       await page.getByText("Tabla", { exact: true }).first().click();
       const fila = page.getByText(/^GP\d{3,}/).first();
@@ -75,7 +75,7 @@ for (const perfil of Object.keys(MATRIZ) as Perfil[]) {
     });
 
     test(`todos pueden crear una solicitud`, async ({ page }) => {
-      test.skip(faltaPassword(perfil), `Falta la contraseña de ${perfil}`);
+      test.skip(!sesionDisponible(perfil), `Sin sesión de ${perfil}`);
       await abrirTablero(page);
       await page.getByRole("button", { name: /^Nueva$/i }).click();
       await expect(page.getByRole("heading", { name: /Nueva solicitud de diseño/i })).toBeVisible();
@@ -87,7 +87,7 @@ for (const perfil of Object.keys(MATRIZ) as Perfil[]) {
 
 test.describe("Quota no ve el trabajo del Trafficker", () => {
   test("ve menos solicitudes que el Trafficker, y ninguna suya", async ({ browser }) => {
-    test.skip(faltaPassword("operator") || faltaPassword("admin"), "Faltan contraseñas");
+    test.skip(!sesionDisponible("operator") || !sesionDisponible("admin"), "Faltan contraseñas");
 
     const ids = async (perfil: Perfil): Promise<string[]> => {
       const ctx = await browser.newContext({ storageState: ficheroSesion(perfil) });

@@ -7,7 +7,7 @@
  * Nunca toca una solicitud real del equipo.
  */
 import { test, expect } from "@playwright/test";
-import { ficheroSesion, faltaPassword } from "./helpers/sesion";
+import { ficheroSesion, sesionDisponible } from "./helpers/sesion";
 import { crearSolicitud, borrarSolicitud, leerSolicitud, hayFirebase, MARCADOR } from "./helpers/datos";
 
 const creadas: string[] = [];
@@ -30,7 +30,7 @@ test.describe("Crear solicitudes", () => {
   test.use({ storageState: ficheroSesion("admin") });
 
   test("basta el nombre: el resto es opcional", async ({ page }) => {
-    test.skip(faltaPassword("admin"), "Falta E2E_ADMIN_PASS");
+    test.skip(!sesionDisponible("admin"), "Falta E2E_ADMIN_PASS");
     await page.goto("/");
     await expect(page.getByRole("heading", { name: /Solicitudes de diseño/i })).toBeVisible({ timeout: 25_000 });
     await page.getByRole("button", { name: /^Nueva$/i }).click();
@@ -64,7 +64,7 @@ test.describe("Crear solicitudes", () => {
   });
 
   test("dos solicitudes seguidas reciben números distintos", async ({ page }) => {
-    test.skip(faltaPassword("admin"), "Falta E2E_ADMIN_PASS");
+    test.skip(!sesionDisponible("admin"), "Falta E2E_ADMIN_PASS");
     test.setTimeout(150_000);
     const ids: string[] = [];
     for (let i = 0; i < 2; i++) {
@@ -82,7 +82,7 @@ test.describe("Crear solicitudes", () => {
   });
 
   test("sin nombre no deja crear", async ({ page }) => {
-    test.skip(faltaPassword("admin"), "Falta E2E_ADMIN_PASS");
+    test.skip(!sesionDisponible("admin"), "Falta E2E_ADMIN_PASS");
     await page.goto("/");
     await page.getByRole("button", { name: /^Nueva$/i }).click();
     await page.getByPlaceholder("Nombre del requerimiento...").fill("");
@@ -95,7 +95,7 @@ test.describe("Trabajar una solicitud", () => {
   test.use({ storageState: ficheroSesion("designer") });
 
   test("el diseñador cambia el estado y queda registrado", async ({ page }) => {
-    test.skip(faltaPassword("designer") || !hayFirebase(), "Faltan credenciales");
+    test.skip(!sesionDisponible("designer") || !hayFirebase(), "Faltan credenciales");
     test.setTimeout(150_000);
     const id = await crearSolicitud({ title: `${MARCADOR} estado ${Date.now()}` });
     creadas.push(id);
@@ -110,7 +110,7 @@ test.describe("Trabajar una solicitud", () => {
   });
 
   test("el diseñador entrega una pieza y se guarda", async ({ page }) => {
-    test.skip(faltaPassword("designer") || !hayFirebase(), "Faltan credenciales");
+    test.skip(!sesionDisponible("designer") || !hayFirebase(), "Faltan credenciales");
     test.setTimeout(180_000);
     const id = await crearSolicitud({ title: `${MARCADOR} entrega ${Date.now()}` });
     creadas.push(id);
@@ -153,7 +153,7 @@ test.describe("Trabajar una solicitud", () => {
   });
 
   test("un comentario del diseñador se guarda", async ({ page }) => {
-    test.skip(faltaPassword("designer") || !hayFirebase(), "Faltan credenciales");
+    test.skip(!sesionDisponible("designer") || !hayFirebase(), "Faltan credenciales");
     test.setTimeout(150_000);
     const id = await crearSolicitud({ title: `${MARCADOR} comentario ${Date.now()}` });
     creadas.push(id);
@@ -172,7 +172,7 @@ test.describe("Declinar", () => {
   test.use({ storageState: ficheroSesion("admin") });
 
   test("declinar pide motivo y deja la solicitud declinada", async ({ page }) => {
-    test.skip(faltaPassword("admin") || !hayFirebase(), "Faltan credenciales");
+    test.skip(!sesionDisponible("admin") || !hayFirebase(), "Faltan credenciales");
     test.setTimeout(150_000);
     const id = await crearSolicitud({ title: `${MARCADOR} declinar ${Date.now()}` });
     creadas.push(id);

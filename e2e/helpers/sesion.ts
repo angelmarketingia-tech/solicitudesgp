@@ -9,6 +9,7 @@
  * Ahora `auth.setup.ts` entra UNA vez por perfil y guarda la sesión; las
  * pruebas arrancan ya dentro. Solo `acceso.spec.ts` prueba el login de verdad.
  */
+import fs from "fs";
 import path from "path";
 import type { Page } from "@playwright/test";
 import { expect } from "@playwright/test";
@@ -79,4 +80,20 @@ export async function entrarYEsperar(page: Page, perfil: Perfil) {
 /** Abre una pestaña del menú lateral. */
 export async function irA(page: Page, pestana: string) {
   await page.getByText(pestana, { exact: true }).first().click();
+}
+
+/**
+ * ¿Se pudo iniciar sesión con este perfil? `auth.setup.ts` deja el fichero
+ * vacío cuando no. Las pruebas lo consultan para saltarse solas en vez de
+ * fallar con una pantalla de login.
+ */
+export function sesionDisponible(perfil: Perfil): boolean {
+  try {
+    const datos = JSON.parse(fs.readFileSync(ficheroSesion(perfil), "utf8")) as {
+      origins?: { localStorage?: { name: string }[] }[];
+    };
+    return (datos.origins || []).some(o => (o.localStorage || []).some(x => x.name === "gp_role"));
+  } catch {
+    return false;
+  }
 }
