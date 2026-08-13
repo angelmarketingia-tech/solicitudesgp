@@ -181,3 +181,36 @@ test.describe("Subir arrastrando", () => {
     await expect(page.getByText(/No se pudo subir/i)).toHaveCount(0);
   });
 });
+
+test.describe("CMR compartido", () => {
+  test("lo que sube Diseño en CMR lo ve Comercial en la misma carpeta", async ({ browser }) => {
+    test.skip(!sesionDisponible("designer") || !sesionDisponible("comercial"), "Faltan sesiones");
+    test.setTimeout(180_000);
+
+    const nombre = `E2E-compartido-${Date.now()}`;
+
+    // El diseñador crea una carpeta en CMR.
+    const ctxD = await browser.newContext({ storageState: ficheroSesion("designer") });
+    const disenador = await ctxD.newPage();
+    await disenador.goto("/");
+    await disenador.getByText("CMR", { exact: true }).click();
+    await expect(disenador.getByRole("button", { name: /Nueva carpeta/i })).toBeVisible({ timeout: 40_000 });
+    await disenador.getByRole("button", { name: /Nueva carpeta/i }).click();
+    await disenador.getByPlaceholder(/EL SALVADOR/i).fill(nombre);
+    await disenador.getByRole("button", { name: /Crear carpeta/i }).click();
+    await expect(disenador.getByText(nombre)).toBeVisible({ timeout: 30_000 });
+    await ctxD.close();
+
+    // Y Comercial la ve en su propio CMR.
+    const ctxC = await browser.newContext({ storageState: ficheroSesion("comercial") });
+    const comercial = await ctxC.newPage();
+    await comercial.goto("/");
+    await comercial.getByText("CMR", { exact: true }).click();
+    await expect(comercial.getByText(nombre)).toBeVisible({ timeout: 40_000 });
+    await ctxC.close();
+
+    // Se retira la carpeta de prueba.
+    const { borrarCarpetaCmrPorNombre } = await import("./helpers/datos");
+    await borrarCarpetaCmrPorNombre(nombre);
+  });
+});

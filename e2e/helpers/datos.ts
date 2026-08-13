@@ -109,3 +109,12 @@ export async function limpiarRestos(): Promise<number> {
   }
   return borrados;
 }
+
+/** Borra una carpeta del CMR por su nombre (limpieza de pruebas). */
+export async function borrarCarpetaCmrPorNombre(nombre: string) {
+  const { db } = firebase();
+  const snap = await getDocs(query(collection(db, "requests"), where("board", "==", "cmr")));
+  for (const d of snap.docs) {
+    if (String(d.data().name || "") === nombre) await deleteDoc(d.ref).catch(() => { /* */ });
+  }
+}

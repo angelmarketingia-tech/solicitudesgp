@@ -2495,7 +2495,9 @@ export default function GanaPlayMainApp() {
             <div style={navItemStyle(activeTab === 'Redes Sociales')} onClick={() => setActiveTab('Redes Sociales')}><CalendarDays size={15} /> Redes Sociales</div>
           )}
           <div style={navItemStyle(activeTab === 'Promocionales')} onClick={() => setActiveTab('Promocionales')}><Megaphone size={15} /> Promocionales</div>
-          {(esComercial || role === 'admin') && (
+          {/* CMR es COMPARTIDO: lo suben los diseñadores y lo consulta
+              Comercial, sobre la misma carpeta. */}
+          {(esComercial || role === 'admin' || role === 'designer') && (
             <div style={navItemStyle(activeTab === 'CMR')} onClick={() => setActiveTab('CMR')}><FolderKanban size={15} /> CMR</div>
           )}
           {(role === 'admin' || role === 'cm') && (
@@ -3104,7 +3106,7 @@ export default function GanaPlayMainApp() {
           <InfluencerModule role={role} userName={userName} addToast={addToast} />
         )}
 
-        {activeTab === 'CMR' && (esComercial || role === 'admin') && (
+        {activeTab === 'CMR' && (esComercial || role === 'admin' || role === 'designer') && (
           <PromoModule tablero="cmr" role={role} userName={userName} addToast={addToast} />
         )}
 

@@ -46,9 +46,12 @@ const ACCEPT_ATTR = ".jpg,.jpeg,.png,.webp,.gif,.pdf,.mp4,.mov,.webm,.rar,.zip,.
 
 export default function PromoModule({ role, userName, addToast, tablero = "promo" }: Props) {
   const esCMR = tablero === "cmr";
-  // En Promocionales sube el equipo de Diseño; el CMR lo lleva Comercial (y el
-  // Trafficker, que ve y ordena todo).
-  const canManage = esCMR ? (role === "comercial" || role === "admin") : role === "designer";
+  // Promocionales lo sube Diseño. El CMR es COMPARTIDO: suben los diseñadores
+  // (son quienes entregan) y Comercial trabaja sobre esa misma carpeta; el
+  // Trafficker ve y ordena todo.
+  const canManage = esCMR
+    ? (role === "comercial" || role === "admin" || role === "designer")
+    : role === "designer";
 
   const [items, setItems] = useState<PromoItem[]>([]);
   const [config, setConfig] = useState<PromoConfig | null>(null);
