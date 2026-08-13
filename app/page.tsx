@@ -18,7 +18,7 @@ import {
   addDoc, query, orderBy, serverTimestamp, getDoc, getDocs, limit, limitToLast, arrayUnion, runTransaction
 } from 'firebase/firestore';
 import { ref, deleteObject, listAll } from 'firebase/storage';
-import { emailForUser, DEFAULT_TRAFFICKER_EMAIL, SUGGESTED_REQUESTER_EMAILS } from '@/lib/users';
+import { emailForUser, DEFAULT_TRAFFICKER_EMAIL } from '@/lib/users';
 import { entrarConPersonal, cambiarPassword, recuperarPassword, MIN_PASSWORD } from '@/lib/account';
 import { compressImageToDataUrl, validateImage } from '@/lib/image';
 import { uploadToStorage, storageErrorMessage } from '@/lib/storage-upload';
@@ -3267,20 +3267,9 @@ export default function GanaPlayMainApp() {
                   </button>
                 </div>
 
-                {/* Sugerencias de un clic (las no agregadas aún) */}
-                {SUGGESTED_REQUESTER_EMAILS.filter(s => !requesterEmails.some(e => e.toLowerCase() === s.toLowerCase())).length > 0 && (
-                  <div style={{ marginTop: '10px' }}>
-                    <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginBottom: '6px' }}>Sugeridos:</div>
-                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
-                      {SUGGESTED_REQUESTER_EMAILS.filter(s => !requesterEmails.some(e => e.toLowerCase() === s.toLowerCase())).map(s => (
-                        <span key={s} onClick={() => addRequesterEmail(s)}
-                          style={{ cursor: 'pointer', background: 'var(--surface-1)', border: '1px dashed var(--border-color)', borderRadius: '20px', padding: '5px 10px', fontSize: '12px', color: 'var(--text-secondary)' }}>
-                          + {s}
-                        </span>
-                      ))}
-                    </div>
-                  </div>
-                )}
+                {/* Las sugerencias de correos del equipo se retiraron: en una
+                    solicitud solo tiene que aparecer el correo de quien la
+                    pide. Quien necesite sumar a alguien lo escribe arriba. */}
               </div>
 
               <div className="form-group">
