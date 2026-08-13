@@ -5,15 +5,18 @@
  *
  * URL: /i/<shareCode>  (código secreto no adivinable)
  *
- * NO requiere login: lee de Firestore con la API key pública (la colección
- * `requests` tiene `allow read: if true`). El influencer solo VE su calendario
- * de contenido; no puede editar nada.
+ * NO requiere login. El influencer solo VE su calendario; no edita nada.
+ *
+ * Los datos NO se leen de Firestore desde el navegador, sino de
+ * `/api/influencer/<code>`, que consulta desde el servidor. Firestore usa una
+ * conexión de streaming que algunas redes móviles dejan colgada sin dar error,
+ * y esta pantalla se quedaba cargando para siempre (le pasó a una influencer en
+ * El Salvador con un enlace correcto). Contra nuestro dominio es una petición
+ * normal: si funciona la página, funcionan los datos.
  */
 
 import React, { use, useEffect, useMemo, useState } from "react";
 import { ChevronLeft, ChevronRight, CalendarDays, X, Lock, WifiOff } from "lucide-react";
-import { db } from "@/lib/firebase";
-import { collection, onSnapshot, query, where } from "firebase/firestore";
 import {
   Influencer, ContentItem,
   STATUS_STYLE, PILLAR_STYLE, DOW_ES,
@@ -36,45 +39,46 @@ export default function PublicInfluencerPage({ params }: { params: Promise<{ cod
   const [viewY, setViewY] = useState(today.getFullYear());
   const [viewM, setViewM] = useState(today.getMonth());
 
-  // 1) Resolver el influencer por su código secreto.
+  // Los datos los sirve NUESTRO servidor (/api/influencer/<code>), no Firestore
+  // directamente. En algunas redes móviles la conexión de streaming de
+  // Firestore se queda colgada sin dar error y esta pantalla no salía nunca del
+  // "Cargando…". Contra nuestro dominio —el mismo del que ya bajó la página—
+  // es una petición normal, y si falla, falla rápido y se puede reintentar.
+  const [intento, setIntento] = useState(0);
+  const [enlaceInvalido, setEnlaceInvalido] = useState(false);
+
   useEffect(() => {
     if (!code) return;
-    const qy = query(collection(db, "requests"), where("shareCode", "==", code));
-    // Vigilancia: Firestore puede no responder NI dar error si la red bloquea
-    // su conexión de streaming. Sin esto, la espera es infinita.
-    const vigilante = setTimeout(() => setSinConexion(true), 15_000);
-    const unsub = onSnapshot(qy, (snap) => {
-      const found = snap.docs.find(d => d.data().board === "influencer");
-      // OJO: sin red, Firestore responde igualmente con lo que tenga en caché
-      // (vacío). Dar eso por bueno hacía que un enlace CORRECTO se anunciara
-      // como "Enlace no válido". Si no hay nada y la respuesta no vino del
-      // servidor, es un problema de conexión, no un enlace malo.
-      if (!found && snap.metadata.fromCache) { clearTimeout(vigilante); setSinConexion(true); return; }
-      clearTimeout(vigilante);
-      setSinConexion(false);
-      setInfluencer(found ? influencerFromDoc(found.id, found.data()) : null);
-      setLoading(false);
-    }, () => {
-      // Un fallo de red NO es un enlace inválido: decirle a alguien de fuera
-      // que su link no sirve, cuando lo que falla es su conexión, la deja sin
-      // saber qué hacer (y culpando al link).
-      clearTimeout(vigilante);
-      setSinConexion(true);
-    });
-    return () => { clearTimeout(vigilante); unsub(); };
-  }, [code]);
+    let vigente = true;
+    const corte = new AbortController();
+    const vigilante = setTimeout(() => corte.abort(), 20_000);
 
-  // 2) Cargar sus tarjetas de contenido.
-  useEffect(() => {
-    if (!influencer) { setItems([]); return; }
-    const qy = query(collection(db, "requests"), where("influencerId", "==", influencer.id));
-    const unsub = onSnapshot(qy, (snap) => {
-      setItems(snap.docs
-        .filter(d => d.data().board === "influencer_item")
-        .map(d => itemFromDoc(d.id, d.data())));
-    }, () => { /* silencioso */ });
-    return () => unsub();
-  }, [influencer]);
+    (async () => {
+      setLoading(true);
+      setSinConexion(false);
+      try {
+        const res = await fetch(`/api/influencer/${encodeURIComponent(code)}`, {
+          signal: corte.signal,
+          cache: "no-store",
+        });
+        if (!vigente) return;
+        if (res.status === 404) { setEnlaceInvalido(true); setLoading(false); return; }
+        if (!res.ok) { setSinConexion(true); return; }
+        const datos = await res.json();
+        if (!vigente) return;
+        setInfluencer(influencerFromDoc(datos.influencer.id, datos.influencer));
+        setItems((datos.items || []).map((it: { id: string }) => itemFromDoc(it.id, it)));
+        setEnlaceInvalido(false);
+        setLoading(false);
+      } catch {
+        if (vigente) setSinConexion(true);
+      } finally {
+        clearTimeout(vigilante);
+      }
+    })();
+
+    return () => { vigente = false; clearTimeout(vigilante); corte.abort(); };
+  }, [code, intento]);
 
   const weeks = useMemo(() => monthGrid(viewY, viewM), [viewY, viewM]);
   const itemsByDay = useMemo(() => {
@@ -105,7 +109,7 @@ export default function PublicInfluencerPage({ params }: { params: Promise<{ cod
           Parece un problema de conexión. Prueba con datos móviles si estás en wifi
           (o al revés), o ábrelo en Chrome o Safari en vez de dentro de WhatsApp.
         </p>
-        <button className="btn" onClick={() => window.location.reload()} style={{ padding: "12px 22px" }}>
+        <button className="btn" onClick={() => setIntento(n => n + 1)} style={{ padding: "12px 22px" }}>
           Reintentar
         </button>
       </div>
@@ -124,7 +128,8 @@ export default function PublicInfluencerPage({ params }: { params: Promise<{ cod
     );
   }
 
-  if (!influencer) {
+  // Sin influencer solo puede ser un enlace que el servidor no reconoció.
+  if (enlaceInvalido || !influencer) {
     return (
       <div style={{ maxWidth: "560px", margin: "0 auto", padding: "80px 16px", textAlign: "center" }}>
         <Lock size={44} style={{ opacity: 0.4, marginBottom: "12px" }} />
