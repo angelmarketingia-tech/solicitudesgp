@@ -933,9 +933,24 @@ export default function GanaPlayMainApp() {
   //  · GIF o imágenes muy grandes → Storage (comprimir un GIF lo rompería).
   //  · Documentos (PDF/Word) → Storage, hasta MAX_REF_DOC_BYTES.
   // Acepta varios archivos a la vez y los acumula.
+  const [arrastrandoRef, setArrastrandoRef] = useState(false);
+  const contadorArrastreRef = useRef(0);
+
+  const alSoltarReferencias = async (e: React.DragEvent) => {
+    e.preventDefault();
+    contadorArrastreRef.current = 0;
+    setArrastrandoRef(false);
+    await procesarReferencias(Array.from(e.dataTransfer?.files || []));
+  };
+
   const handleRefUpload = async (e: ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(e.target.files ?? []);
     e.target.value = "";
+    await procesarReferencias(files);
+  };
+
+  /** Adjunta referencias, vengan del selector o arrastradas. */
+  const procesarReferencias = async (files: File[]) => {
     if (files.length === 0) return;
     setLoading(true);
     try {
@@ -1379,6 +1394,30 @@ export default function GanaPlayMainApp() {
   const handleDeliverablesUpload = async (e: ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(e.target.files || []);
     e.target.value = "";
+    await subirEntregables(files);
+  };
+
+  /**
+   * Arrastrar archivos sobre la zona de entregables.
+   *
+   * `dragOver` se dispara muchísimas veces y `dragLeave` también al pasar por
+   * encima de los hijos, así que se lleva un contador de entradas/salidas en
+   * vez de un simple booleano: si no, el resaltado parpadea.
+   */
+  const [arrastrandoEntrega, setArrastrandoEntrega] = useState(false);
+  const contadorArrastre = useRef(0);
+
+  const alSoltarEntregables = async (e: React.DragEvent) => {
+    e.preventDefault();
+    contadorArrastre.current = 0;
+    setArrastrandoEntrega(false);
+    const files = Array.from(e.dataTransfer?.files || []);
+    if (files.length === 0) return;
+    await subirEntregables(files);
+  };
+
+  /** Sube una tanda de entregables, vengan del selector o arrastrados. */
+  const subirEntregables = async (files: File[]) => {
     if (files.length === 0 || !selectedReq) return;
     let working: RequestType = selectedReq;
     let ok = 0;
@@ -3418,11 +3457,18 @@ export default function GanaPlayMainApp() {
                   </div>
                 )}
 
-                <label style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '10px', padding: '26px', background: 'var(--surface-1)', borderRadius: '14px', border: '2px dashed var(--accent-color)', cursor: 'pointer', position: 'relative', width: 'auto' }}>
+                <label
+                  onDragEnter={e => { e.preventDefault(); contadorArrastreRef.current++; setArrastrandoRef(true); }}
+                  onDragOver={e => { e.preventDefault(); }}
+                  onDragLeave={e => { e.preventDefault(); contadorArrastreRef.current--; if (contadorArrastreRef.current <= 0) setArrastrandoRef(false); }}
+                  onDrop={alSoltarReferencias}
+                  style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '10px', padding: '26px', background: arrastrandoRef ? 'var(--accent-soft)' : 'var(--surface-1)', borderRadius: '14px', border: `2px dashed ${arrastrandoRef ? 'var(--accent-dark)' : 'var(--accent-color)'}`, cursor: 'pointer', position: 'relative', width: 'auto', transition: 'background 0.15s ease, border-color 0.15s ease' }}>
                   <UploadCloud size={36} color="var(--accent-color)" />
                   <div style={{ textAlign: 'center' }}>
                     <div style={{ fontWeight: 700, color: 'var(--text-primary)', marginBottom: '4px' }}>
-                      {refProgress || ((referenceImgs.length + referenceFiles.length) > 0 ? 'Añadir más referencias' : 'Sube referencias')}
+                      {refProgress || (arrastrandoRef ? 'Suelta aquí para adjuntar'
+                        : (referenceImgs.length + referenceFiles.length) > 0 ? 'Añadir más referencias'
+                        : 'Arrastra las referencias aquí o haz clic')}
                     </div>
                     <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
                       Imágenes (JPG, PNG, GIF) · o documentos <strong>PDF</strong> y <strong>Word</strong> · hasta {Math.round(MAX_REF_DOC_BYTES / 1024 / 1024)} MB
@@ -3929,14 +3975,34 @@ export default function GanaPlayMainApp() {
 
                   {role === 'designer' && (
                     <>
-                      <label className="btn" style={{ width: '100%', cursor: 'pointer', padding: '12px' }}>
-                        <UploadCloud size={16} /> Subir entregables (uno o varios)
+                      {/* Toda la zona acepta archivos arrastrados, no solo el
+                          botón: es lo que la gente intenta primero. */}
+                      <label
+                        onDragEnter={e => { e.preventDefault(); contadorArrastre.current++; setArrastrandoEntrega(true); }}
+                        onDragOver={e => { e.preventDefault(); }}
+                        onDragLeave={e => { e.preventDefault(); contadorArrastre.current--; if (contadorArrastre.current <= 0) setArrastrandoEntrega(false); }}
+                        onDrop={alSoltarEntregables}
+                        style={{
+                          width: '100%', cursor: 'pointer', padding: '22px 16px', display: 'flex',
+                          flexDirection: 'column', alignItems: 'center', gap: '8px', textAlign: 'center',
+                          borderRadius: '14px',
+                          border: `2px dashed ${arrastrandoEntrega ? 'var(--accent-dark)' : 'var(--accent-color)'}`,
+                          background: arrastrandoEntrega ? 'var(--accent-soft)' : 'var(--surface-1)',
+                          transition: 'background 0.15s ease, border-color 0.15s ease',
+                        }}>
+                        <UploadCloud size={30} color="var(--accent-color)" />
+                        <div style={{ fontWeight: 700, color: 'var(--text-primary)', fontSize: '14px' }}>
+                          {arrastrandoEntrega ? 'Suelta aquí para subir' : 'Arrastra los entregables aquí'}
+                        </div>
+                        <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
+                          o haz clic para elegirlos · uno o varios
+                        </div>
                         <input type="file" multiple accept={DELIVERABLE_ACCEPT}
                           onChange={handleDeliverablesUpload} style={{ display: 'none' }} />
                       </label>
                       <p style={{ fontSize: '11px', color: 'var(--text-muted)', margin: '8px 0 14px' }}>
                         Estáticos: JPG, PNG, WEBP · Animados: GIF, APNG · Video: MP4, WEBM, MOV · Archivos: PDF, ZIP.
-                        <br />Hasta {formatMB(MAX_FILE_BYTES)} por archivo ({formatMB(MAX_VIDEO_BYTES)} en video). Puedes seleccionar varios a la vez.
+                        <br />Hasta {formatMB(MAX_FILE_BYTES)} por archivo ({formatMB(MAX_VIDEO_BYTES)} en video).
                       </p>
                     </>
                   )}

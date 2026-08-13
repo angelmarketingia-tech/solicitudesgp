@@ -327,15 +327,20 @@ export default function PromoModule({ role, userName, addToast, tablero = "promo
         <>
           {/* Carpetas */}
           {folders.length > 0 && (
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(200px, 1fr))", gap: "12px", marginBottom: files.length ? "20px" : 0 }}>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(240px, 1fr))", gap: "12px", marginBottom: files.length ? "20px" : 0 }}>
               {folders.map(f => (
-                <div key={f.id} className="card" style={{ padding: "14px", display: "flex", alignItems: "center", gap: "12px", cursor: "pointer" }} onClick={() => setCurrentId(f.id)}>
-                  <Folder size={26} color="var(--accent-color)" style={{ flexShrink: 0 }} />
-                  <div style={{ minWidth: 0, flex: 1 }}>
-                    <div style={{ fontSize: "14px", fontWeight: 700, color: "var(--text-primary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{f.name}</div>
-                    <div style={{ fontSize: "11px", color: "var(--text-muted)" }}>{items.filter(i => i.parentId === f.id).length} elemento(s)</div>
+                <div key={f.id} className="card" style={{ padding: "14px", display: "flex", flexDirection: "column", gap: "10px", cursor: "pointer" }} onClick={() => setCurrentId(f.id)}>
+                  {/* El nombre va en su propia línea: compartiendo fila con los
+                      cuatro botones se quedaba en "2026…" o "07…", que era
+                      justo lo que había que poder leer. */}
+                  <div style={{ display: "flex", alignItems: "center", gap: "10px", minWidth: 0 }}>
+                    <Folder size={24} color="var(--accent-color)" style={{ flexShrink: 0 }} />
+                    <div style={{ minWidth: 0, flex: 1 }}>
+                      <div title={f.name} style={{ fontSize: "15px", fontWeight: 700, color: "var(--text-primary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{f.name}</div>
+                      <div style={{ fontSize: "11px", color: "var(--text-muted)" }}>{items.filter(i => i.parentId === f.id).length} elemento(s)</div>
+                    </div>
                   </div>
-                  <div style={{ display: "flex", gap: "4px", flexShrink: 0 }} onClick={e => e.stopPropagation()}>
+                  <div style={{ display: "flex", gap: "6px", flexWrap: "wrap", justifyContent: "flex-end" }} onClick={e => e.stopPropagation()}>
                     <button className="btn-secondary" title="Copiar link solo de esta carpeta" style={{ padding: "6px", borderRadius: "8px", cursor: "pointer" }} onClick={() => copyFolderLink(f)}><Link2 size={13} /></button>
                     {canManage && (
                       <>

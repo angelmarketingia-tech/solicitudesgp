@@ -145,3 +145,39 @@ test.describe("Planeación y formato", () => {
     await expect(page.getByText("La entrega llega a TODOS (1)")).toBeVisible();
   });
 });
+
+test.describe("Subir arrastrando", () => {
+  test.use({ storageState: ficheroSesion("designer") });
+
+  test("un entregable se sube soltándolo sobre la zona", async ({ page }) => {
+    test.skip(!sesionDisponible("designer") || !hayFirebase(), "Faltan credenciales");
+    test.setTimeout(180_000);
+    const id = await crearSolicitud({ title: `${MARCADOR} arrastre ${Date.now()}` });
+    creadas.push(id);
+
+    await page.goto(`/?solicitud=${id}`);
+    const zona = page.getByText(/Arrastra los entregables aquí/i);
+    await expect(zona).toBeVisible({ timeout: 75_000 });
+
+    // Se construye un DataTransfer real en el navegador y se sueltan los
+    // eventos de arrastre sobre la zona, como haría una persona.
+    const gif = "R0lGODlhCgAKAIAAAP8AAAAA/yH5BAAAAAAALAAAAAAKAAoAAAIKhI+py+0Po5yUFQA7";
+    await page.evaluate(async ({ base64 }) => {
+      const zona = [...document.querySelectorAll("label")]
+        .find(l => l.textContent?.includes("Arrastra los entregables aquí"));
+      if (!zona) throw new Error("no se encontró la zona de arrastre");
+      const bytes = Uint8Array.from(atob(base64), c => c.charCodeAt(0));
+      const archivo = new File([bytes], "arrastrado.gif", { type: "image/gif" });
+      const dt = new DataTransfer();
+      dt.items.add(archivo);
+      zona.dispatchEvent(new DragEvent("dragenter", { bubbles: true, dataTransfer: dt }));
+      zona.dispatchEvent(new DragEvent("dragover", { bubbles: true, dataTransfer: dt }));
+      zona.dispatchEvent(new DragEvent("drop", { bubbles: true, dataTransfer: dt }));
+    }, { base64: gif });
+
+    // La pieza queda guardada (su tarjeta trae botón de descarga).
+    const tarjeta = page.locator(".card").filter({ hasText: "arrastrado.gif" });
+    await expect(tarjeta.getByRole("button", { name: /Descargar/i })).toBeVisible({ timeout: 120_000 });
+    await expect(page.getByText(/No se pudo subir/i)).toHaveCount(0);
+  });
+});

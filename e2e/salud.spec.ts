@@ -17,6 +17,9 @@ const RUIDO = [
   /\[HMR\]/i,
   /permission-denied/i,          // listeners de módulos que el perfil no usa
   /Failed to load resource.*40[34]/i,
+  // El equipo suspendió la red a mitad de la corrida: no dice nada de la app.
+  /ERR_NETWORK_IO_SUSPENDED/i,
+  /ERR_INTERNET_DISCONNECTED/i,
 ];
 
 function erroresReales(mensajes: string[]): string[] {
