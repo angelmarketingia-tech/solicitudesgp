@@ -20,26 +20,30 @@ import { db } from "@/lib/firebase";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-/** Quita lo que pesa mucho y el tablero no necesita para pintar las tarjetas. */
+/**
+ * Quita del documento cualquier imagen incrustada en base64 (`data:…`).
+ *
+ * Muchas piezas, referencias y comentarios antiguos llevan la imagen ENTERA
+ * dentro del documento. Enviarlas todas dejaba esta respuesta en 3,6 MB, y se
+ * consulta cada 25 s por persona. Se recorre el documento entero porque
+ * aparecen en sitios variados (piezas, referencias, imágenes de comentarios).
+ *
+ * Lo que se pierde en modo respaldo es ver esas imágenes antiguas; las que
+ * están en Storage (todas las nuevas) se ven igual, porque son URLs normales.
+ */
+function sinBase64(valor: unknown): unknown {
+  if (typeof valor === "string") return valor.startsWith("data:") ? "" : valor;
+  if (Array.isArray(valor)) return valor.map(sinBase64);
+  if (valor && typeof valor === "object") {
+    const salida: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(valor as Record<string, unknown>)) salida[k] = sinBase64(v);
+    return salida;
+  }
+  return valor;
+}
+
 function aligerar(id: string, data: Record<string, unknown>) {
-  const creatives = Array.isArray(data.creatives) ? data.creatives : [];
-  const messages = Array.isArray(data.messages) ? data.messages : [];
-  return {
-    ...data,
-    id,
-    // Las piezas y referencias antiguas llevan la imagen entera incrustada en
-    // base64: mandarlas todas serían megas por consulta. Se conservan las
-    // URLs normales y se descartan solo esas.
-    creatives: creatives.map((c) => {
-      const pieza = c as { url?: string };
-      return typeof pieza?.url === "string" && pieza.url.startsWith("data:")
-        ? { ...pieza, url: "", pesada: true }
-        : pieza;
-    }),
-    messages,
-    referenceImages: (Array.isArray(data.referenceImages) ? data.referenceImages : [])
-      .filter((u) => typeof u === "string" && !u.startsWith("data:")),
-  };
+  return { ...(sinBase64(data) as Record<string, unknown>), id };
 }
 
 export async function GET() {
