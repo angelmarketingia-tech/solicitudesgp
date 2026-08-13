@@ -347,6 +347,9 @@ export default function GanaPlayMainApp() {
     [requests, role],
   );
   const [loadingData, setLoadingData] = useState(true);
+  // El tablero se está sirviendo desde nuestro servidor porque la conexión en
+  // vivo con la base de datos no responde en esta red.
+  const [modoRespaldo, setModoRespaldo] = useState(false);
 
   // ── Login ──
   // Acceso principal: correo corporativo. "Acceso por rol" queda como respaldo.
@@ -486,11 +489,50 @@ export default function GanaPlayMainApp() {
 
     // Límite alto: 1000 solicitudes activas/recientes. Suficiente para 12-24 meses
     // de operación normal del equipo. Cuando se supere, migrar a paginación real.
+    // ── Tablero en tiempo real, con respaldo por servidor ──
+    //
+    // El navegador lee Firestore por una conexión de streaming que algunas
+    // redes cortan a medias: no falla, se cuelga. Cuando pasa, el tablero se
+    // queda vacío y no se puede ni crear una solicitud. Si a los 8 segundos no
+    // ha llegado nada, se pasa a pedirle los datos a nuestro servidor y se
+    // consulta cada 25 s. Si el tiempo real acaba respondiendo, se vuelve a él.
+    let llegoAlgoEnVivo = false;
+    let encuestando: ReturnType<typeof setInterval> | null = null;
+
+    const pedirAlServidor = async () => {
+      try {
+        const res = await fetch('/api/board', { cache: 'no-store' });
+        if (!res.ok) return;
+        const datos = await res.json();
+        if (llegoAlgoEnVivo || !Array.isArray(datos.requests)) return;
+        setRequests(datos.requests as RequestType[]);
+        setLoadingData(false);
+        setModoRespaldo(true);
+      } catch { /* se reintenta en la siguiente vuelta */ }
+    };
+
+    const vigilante = setTimeout(() => {
+      if (llegoAlgoEnVivo) return;
+      console.warn('[tablero] sin respuesta en vivo; se pasa al respaldo por servidor.');
+      void pedirAlServidor();
+      encuestando = setInterval(pedirAlServidor, 25_000);
+    }, 8_000);
+
     const qReq = query(collection(db, "requests"), orderBy("deliveryDate", "desc"), limit(1000));
     const unsubReq = onSnapshot(qReq, (snap) => {
-      // Excluye los documentos del módulo de influencers (llevan `board`): viven
-      // en `requests` pero NO son solicitudes de diseño y no deben aparecer ni
-      // contarse en ninguna vista del tablero.
+      // OJO: sin conexión, Firestore responde igual desde su caché (vacía) y
+      // al instante. Dar eso por "en vivo" desactivaba el respaldo y dejaba el
+      // tablero vacío, que es justo lo que había que evitar. Solo cuenta una
+      // respuesta que venga DEL SERVIDOR.
+      if (snap.metadata.fromCache && snap.docs.length === 0) return;
+      if (!snap.metadata.fromCache) {
+        llegoAlgoEnVivo = true;
+        clearTimeout(vigilante);
+        if (encuestando) { clearInterval(encuestando); encuestando = null; }
+        setModoRespaldo(false);
+      }
+      // Excluye los documentos de otros módulos (llevan `board`): viven en
+      // `requests` pero NO son solicitudes de diseño.
       const data = snap.docs
         .map(docSnap => ({ id: docSnap.id, ...docSnap.data() } as RequestType & { board?: string }))
         .filter(r => !r.board);
@@ -499,6 +541,9 @@ export default function GanaPlayMainApp() {
       guardarCopiaLocal(data);
     }, (err) => {
       console.error("Firebase error:", err);
+      // Un fallo del tiempo real tampoco deja el tablero muerto.
+      void pedirAlServidor();
+      if (!encuestando) encuestando = setInterval(pedirAlServidor, 25_000);
       setLoadingData(false);
     });
 
@@ -510,7 +555,11 @@ export default function GanaPlayMainApp() {
       setTeamChatContent(data);
     });
 
-    return () => { unsubReq(); unsubChat(); };
+    return () => {
+      clearTimeout(vigilante);
+      if (encuestando) clearInterval(encuestando);
+      unsubReq(); unsubChat();
+    };
   }, []);
 
   // Planeación muestra dos semanas. `desplazamiento` las mueve de dos en dos
@@ -838,8 +887,10 @@ export default function GanaPlayMainApp() {
     }
 
     // El ID se confirma contra el servidor: nunca reutilizar uno existente.
-    const nextId = await reservarIdLibre();
-    if (!nextId) {
+    // En modo respaldo (la red no deja hablar con Firestore) ni se intenta por
+    // aquí: se delega entera la creación en nuestro servidor, más abajo.
+    const nextId = modoRespaldo ? null : await reservarIdLibre();
+    if (!nextId && !modoRespaldo) {
       addToast("No se pudo reservar un número de solicitud. Revisa tu conexión e inténtalo de nuevo.", 'error');
       return;
     }
@@ -870,7 +921,8 @@ export default function GanaPlayMainApp() {
       });
     });
     const newReq: RequestType = {
-      id: nextId,
+      id: nextId || "",   // en modo respaldo lo asigna el servidor
+
       title: titleStr || "Nuevo Requerimiento",
       copy: copyStr,
       format,
@@ -899,23 +951,35 @@ export default function GanaPlayMainApp() {
       // Transacción: si entre la reserva y el guardado alguien ocupó ese
       // número (dos personas creando a la vez), la escritura se aborta en vez
       // de sobrescribir una solicitud ajena.
-      await runTransaction(db, async (tx) => {
-        const ref2 = doc(db, "requests", nextId);
-        const yaExiste = await tx.get(ref2);
-        if (yaExiste.exists()) throw new Error("ID_OCUPADO");
-        tx.set(ref2, { ...newReq, updatedAt: serverTimestamp() });
-      });
+      let idCreada = nextId;
+      if (modoRespaldo) {
+        // Por servidor: él reserva el número y escribe.
+        const res = await fetch('/api/board/crear', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(newReq),
+        });
+        const datos = await res.json();
+        if (!res.ok || !datos.ok) throw new Error(datos.error || 'No se pudo crear la solicitud.');
+        idCreada = datos.id;
+      } else {
+        await runTransaction(db, async (tx) => {
+          const ref2 = doc(db, "requests", nextId!);
+          const yaExiste = await tx.get(ref2);
+          if (yaExiste.exists()) throw new Error("ID_OCUPADO");
+          tx.set(ref2, { ...newReq, updatedAt: serverTimestamp() });
+        });
+      }
       resetCreateForm();
       setCreateModalOpen(false);
-      addToast(`Solicitud ${nextId} creada correctamente.`, 'success');
-      await createNotification('new_request', '📋 Nueva solicitud', `${nextId}: "${newReq.title}" — Entrega ${newReq.deliveryDate || "sin fecha"}`, 'designer', nextId);
+      addToast(`Solicitud ${idCreada} creada correctamente.`, 'success');
+      await createNotification('new_request', '📋 Nueva solicitud', `${idCreada}: "${newReq.title}" — Entrega ${newReq.deliveryDate || "sin fecha"}`, 'designer', idCreada || undefined);
 
       // Regla de alertas: solo prioridad alta/urgente envía correo inmediato.
       if (priority === "Alto" || priority === "Urgente") {
         sendEmailAlert({
           type: "new_request",
           request: {
-            id: nextId, title: newReq.title, priority, deliveryDate,
+            id: idCreada, title: newReq.title, priority, deliveryDate,
             area, objective, copy: copyStr, requesterName,
           },
         });
@@ -2504,6 +2568,16 @@ export default function GanaPlayMainApp() {
             <div style={navItemStyle(activeTab === 'Contenido Influencers')} onClick={() => setActiveTab('Contenido Influencers')}><Users size={15} /> Contenido Influencers</div>
           )}
         </div>
+
+        {modoRespaldo && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '10px 14px', marginBottom: '14px', borderRadius: '10px', background: 'var(--surface-1)', border: '1px solid var(--warning, #b54708)' }}>
+            <AlertCircle size={16} color="var(--warning, #b54708)" style={{ flexShrink: 0 }} />
+            <span style={{ fontSize: '12.5px', color: 'var(--text-secondary)', lineHeight: 1.5 }}>
+              Tu red no permite la conexión en vivo con la base de datos, así que el tablero se está
+              cargando desde el servidor y se actualiza cada 25 segundos. Puedes trabajar con normalidad.
+            </span>
+          </div>
+        )}
 
         {/* ESTADO DE CARGA */}
         {loadingData && visibles.length === 0 && (
