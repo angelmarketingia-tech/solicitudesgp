@@ -18,6 +18,18 @@ import {
 export const PROMO_CONFIG_ID = "PROMO_CONFIG";
 export const PROMO_ROOT = "ROOT"; // parentId del nivel superior
 
+/**
+ * Tableros tipo Drive que usan este mismo código. Se distinguen por el campo
+ * `board` del documento, así que sus contenidos no se mezclan aunque vivan en
+ * la misma colección.
+ *   - "promo" → Promocionales (empresa externa)
+ *   - "cmr"   → CMR, que sustituye al Drive del equipo comercial
+ */
+export type Tablero = "promo" | "cmr";
+export const boardItem = (t: Tablero) => t;                    // 'promo' | 'cmr'
+export const boardConfig = (t: Tablero) => `${t}_config`;       // 'promo_config' | 'cmr_config'
+export const configIdDe = (t: Tablero) => t === "promo" ? PROMO_CONFIG_ID : "CMR_CONFIG";
+
 export type PromoComment = {
   id: string;
   authorName: string;
@@ -133,28 +145,28 @@ export function descendantIds(items: PromoItem[], folderId: string): string[] {
 }
 
 // ─── Config: obtener o crear el doc único ────────────────────────────────────
-export async function getOrCreateConfig(db: Firestore): Promise<PromoConfig> {
-  const snap = await getDocs(query(collection(db, "requests"), where("board", "==", "promo_config")));
+export async function getOrCreateConfig(db: Firestore, tablero: Tablero = "promo"): Promise<PromoConfig> {
+  const snap = await getDocs(query(collection(db, "requests"), where("board", "==", boardConfig(tablero))));
   const existing = snap.docs[0];
   if (existing) return configFromDoc(existing.id, existing.data());
-  await setDoc(doc(db, "requests", PROMO_CONFIG_ID), {
-    board: "promo_config",
-    title: "Promocionales — configuración",
+  await setDoc(doc(db, "requests", configIdDe(tablero)), {
+    board: boardConfig(tablero),
+    title: `${tablero === "promo" ? "Promocionales" : "CMR"} — configuración`,
     status: "Pendiente",
     deliveryDate: "",
     shareCode: genCode(),
     generalMessages: [],
     createdAt: serverTimestamp(),
   });
-  const again = await getDocs(query(collection(db, "requests"), where("board", "==", "promo_config")));
+  const again = await getDocs(query(collection(db, "requests"), where("board", "==", boardConfig(tablero))));
   return configFromDoc(again.docs[0].id, again.docs[0].data());
 }
 
 // ─── Carpetas y archivos ─────────────────────────────────────────────────────
-export async function createFolder(db: Firestore, parentId: string, name: string, by: string): Promise<string> {
+export async function createFolder(db: Firestore, parentId: string, name: string, by: string, tablero: Tablero = "promo"): Promise<string> {
   const id = `PRF-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
   await setDoc(doc(db, "requests", id), {
-    board: "promo", kind: "folder",
+    board: boardItem(tablero), kind: "folder",
     // Requeridos por reglas de `requests`:
     title: name.trim() || "Carpeta", status: "Pendiente", deliveryDate: "",
     // Propios:
@@ -172,10 +184,11 @@ export async function createFile(
   db: Firestore,
   parentId: string,
   data: { name: string; fileUrl: string; fileName: string; fileType: NonNullable<PromoItem["fileType"]>; uploadedBy: string },
+  tablero: Tablero = "promo",
 ): Promise<string> {
   const id = `PRO-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
   await setDoc(doc(db, "requests", id), {
-    board: "promo", kind: "file",
+    board: boardItem(tablero), kind: "file",
     title: data.name.trim() || data.fileName || "Archivo", status: "Pendiente", deliveryDate: "",
     name: data.name.trim() || data.fileName || "Archivo",
     parentId: parentId || PROMO_ROOT,

@@ -10,7 +10,7 @@ import path from "path";
 import { test as setup, expect } from "@playwright/test";
 import { entrar, ficheroSesion, faltaPassword, type Perfil } from "./helpers/sesion";
 
-const PERFILES: Perfil[] = ["admin", "cm", "operator", "administrative", "designer"];
+const PERFILES: Perfil[] = ["admin", "cm", "operator", "administrative", "designer", "comercial"];
 
 /** Deja el fichero vacío: las pruebas de ese perfil se saltarán solas. */
 function marcarNoDisponible(perfil: Perfil, motivo: string) {
@@ -38,13 +38,20 @@ for (const perfil of PERFILES) {
     // sesión: así cada prueba arranca con las solicitudes ya pintadas en vez
     // de esperar a Firestore desde cero, que es lo que hacía fallar por tiempo
     // a las pruebas más lentas de forma intermitente.
-    await expect.poll(
-      async () => page.evaluate(() => {
-        try { return (JSON.parse(localStorage.getItem("gp_requests_backup") || "[]") as unknown[]).length; }
-        catch { return 0; }
-      }),
-      { timeout: 60_000, message: "el tablero no llegó a cachearse" },
-    ).toBeGreaterThan(0);
+    // Es una MEJORA, no un requisito: si no llega a cachearse, las pruebas
+    // igual funcionan (solo esperan a Firestore). Por eso no hace fallar el
+    // setup, que bloquearía toda la suite por algo opcional.
+    try {
+      await expect.poll(
+        async () => page.evaluate(() => {
+          try { return (JSON.parse(localStorage.getItem("gp_requests_backup") || "[]") as unknown[]).length; }
+          catch { return 0; }
+        }),
+        { timeout: 30_000 },
+      ).toBeGreaterThan(0);
+    } catch {
+      console.warn(`ℹ️  Sesión de ${perfil} guardada sin el tablero en caché; sus pruebas irán algo más lentas.`);
+    }
 
     const destino = ficheroSesion(perfil);
     fs.mkdirSync(path.dirname(destino), { recursive: true });

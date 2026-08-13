@@ -12,7 +12,7 @@
  * 'promo_config'), jerarquía por `parentId`. Ver '@/lib/promo'.
  */
 
-import React, { useState, useEffect, useMemo, ChangeEvent } from "react";
+import React, { useState, useEffect, useMemo, useRef, ChangeEvent } from "react";
 import {
   Megaphone, UploadCloud, Download, Trash2, Pencil, X, MessageSquare, Send,
   Copy, ExternalLink, FileText, Image as ImageIcon, RefreshCw, Loader2, FileArchive,
@@ -28,18 +28,27 @@ import {
   itemFromDoc, configFromDoc, fileTypeOf, getOrCreateConfig, sortItems, breadcrumb, descendantIds,
   createFolder, createFile, renamePromoItem, replacePromoFile, deletePromoDoc,
   addPromoComment, addGeneralComment, buildComment, movePromoItem, folderChoices,
-  ensureFolderShareCode,
+  ensureFolderShareCode, boardItem, boardConfig, type Tablero,
 } from "@/lib/promo";
 
 type Toast = (msg: string, type?: "success" | "error" | "info") => void;
-type Props = { role: string | null; userName: string; addToast: Toast };
+type Props = {
+  role: string | null;
+  userName: string;
+  addToast: Toast;
+  /** Qué tablero se muestra. "cmr" reutiliza todo esto para el Drive comercial. */
+  tablero?: Tablero;
+};
 
 const MAX_BYTES = 150 * 1024 * 1024; // 150 MB
 const ALLOWED = ["jpg", "jpeg", "png", "webp", "gif", "pdf", "mp4", "mov", "webm", "rar", "zip", "7z", "tar", "gz"];
 const ACCEPT_ATTR = ".jpg,.jpeg,.png,.webp,.gif,.pdf,.mp4,.mov,.webm,.rar,.zip,.7z,.tar,.gz";
 
-export default function PromoModule({ role, userName, addToast }: Props) {
-  const canManage = role === "designer";
+export default function PromoModule({ role, userName, addToast, tablero = "promo" }: Props) {
+  const esCMR = tablero === "cmr";
+  // En Promocionales sube el equipo de Diseño; el CMR lo lleva Comercial (y el
+  // Trafficker, que ve y ordena todo).
+  const canManage = esCMR ? (role === "comercial" || role === "admin") : role === "designer";
 
   const [items, setItems] = useState<PromoItem[]>([]);
   const [config, setConfig] = useState<PromoConfig | null>(null);
@@ -57,21 +66,44 @@ export default function PromoModule({ role, userName, addToast }: Props) {
   const [openComments, setOpenComments] = useState<Record<string, boolean>>({});
 
   useEffect(() => {
-    getOrCreateConfig(db).catch(() => { /* el listener igual leerá */ });
-    const qy = query(collection(db, "requests"), where("board", "in", ["promo", "promo_config"]));
+    getOrCreateConfig(db, tablero).catch(() => { /* el listener igual leerá */ });
+    const qy = query(collection(db, "requests"), where("board", "in", [boardItem(tablero), boardConfig(tablero)]));
     const unsub = onSnapshot(qy, (snap) => {
       const its: PromoItem[] = [];
       let cfg: PromoConfig | null = null;
       snap.docs.forEach((d) => {
         const data = d.data();
-        if (data.board === "promo") its.push(itemFromDoc(d.id, data));
-        else if (data.board === "promo_config") cfg = configFromDoc(d.id, data);
+        if (data.board === boardItem(tablero)) its.push(itemFromDoc(d.id, data));
+        else if (data.board === boardConfig(tablero)) cfg = configFromDoc(d.id, data);
       });
       setItems(its);
       setConfig(cfg);
     }, (err) => console.warn("[promo] listener:", err));
     return () => unsub();
-  }, []);
+  }, [tablero]);
+
+  const MESES = ["01 Enero", "02 Febrero", "03 Marzo", "04 Abril", "05 Mayo", "06 Junio",
+                 "07 Julio", "08 Agosto", "09 Septiembre", "10 Octubre", "11 Noviembre", "12 Diciembre"];
+  const sembrando = useRef(false);
+  useEffect(() => {
+    if (!esCMR || !canManage || sembrando.current) return;
+    const anio = String(new Date().getFullYear());
+    const raiz = items.filter(i => i.parentId === PROMO_ROOT && i.kind === "folder");
+    // Se espera a tener datos: si aún no cargó nada, no se siembra a ciegas.
+    if (items.length === 0 && !config) return;
+    if (raiz.some(f => f.name === anio)) return;
+    sembrando.current = true;
+    (async () => {
+      try {
+        const idAnio = await createFolder(db, PROMO_ROOT, anio, userName, "cmr");
+        for (const mes of MESES) await createFolder(db, idAnio, mes, userName, "cmr");
+        addToast(`Carpeta ${anio} creada con sus 12 meses.`, "success");
+      } catch {
+        sembrando.current = false;
+      }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [esCMR, canManage, items, config]);
 
   // Si la carpeta actual dejó de existir (fue borrada), vuelve a la raíz.
   useEffect(() => {
@@ -110,7 +142,7 @@ export default function PromoModule({ role, userName, addToast }: Props) {
     try {
       // Ruta bajo `creatives/` (permitida por las reglas de Storage, la misma
       // de los entregables). La carpeta `promos/` estaba bloqueada por reglas.
-      const url = await uploadToStorage("creatives/_promos", file);
+      const url = await uploadToStorage(esCMR ? "creatives/_cmr" : "creatives/_promos", file);
       return { url, type };
     } catch (err) {
       console.warn("[promo] Storage falló:", err);
@@ -159,7 +191,7 @@ export default function PromoModule({ role, userName, addToast }: Props) {
   const handleNewFolder = async () => {
     if (!newFolderName.trim()) { addToast("Escribe el nombre de la carpeta.", "error"); return; }
     try {
-      await createFolder(db, currentId, newFolderName, userName);
+      await createFolder(db, currentId, newFolderName, userName, tablero);
       setNewFolderName(""); setNewFolderOpen(false);
       addToast("Carpeta creada.", "success");
     } catch { addToast("No se pudo crear la carpeta.", "error"); }

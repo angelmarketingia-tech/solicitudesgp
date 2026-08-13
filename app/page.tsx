@@ -4,10 +4,10 @@ import React, { useState, ChangeEvent, useEffect, useRef, useCallback, useMemo }
 import {
   Calendar, Layout, List, Plus, Search, User,
   FileText, Image as ImageIcon, MessageSquare,
-  ChevronRight, CalendarDays, Maximize2, X,
+  ChevronRight, ChevronLeft, CalendarDays, Maximize2, X,
   CheckCircle2, Clock,
   LogOut, AlertCircle, UploadCloud, Bot, Send, Trash2,
-  Download, Bell, Sparkles, Target, Building2, ClipboardList, AtSign, Users, Megaphone, Pencil,
+  Download, Bell, Sparkles, Target, Building2, ClipboardList, AtSign, Users, Megaphone, Pencil, Link2, FolderKanban,
   Play
 } from 'lucide-react';
 
@@ -18,10 +18,11 @@ import {
   addDoc, query, orderBy, serverTimestamp, getDoc, getDocs, limit, limitToLast, arrayUnion, runTransaction
 } from 'firebase/firestore';
 import { ref, deleteObject, listAll } from 'firebase/storage';
-import { emailForUser, DEFAULT_TRAFFICKER_EMAIL, DEFAULT_REQUESTER_EMAILS, SUGGESTED_REQUESTER_EMAILS } from '@/lib/users';
+import { emailForUser, DEFAULT_TRAFFICKER_EMAIL, SUGGESTED_REQUESTER_EMAILS } from '@/lib/users';
 import { entrarConPersonal, cambiarPassword, recuperarPassword, MIN_PASSWORD } from '@/lib/account';
 import { compressImageToDataUrl, validateImage } from '@/lib/image';
 import { uploadToStorage, storageErrorMessage } from '@/lib/storage-upload';
+import { publicLink } from '@/lib/public-url';
 import {
   mediaKindOf, maxBytesFor, formatMB,
   DELIVERABLE_EXTS, DELIVERABLE_ACCEPT, MAX_FILE_BYTES, MAX_VIDEO_BYTES,
@@ -163,10 +164,10 @@ const PROFILE_DEFAULTS: Record<string, { area: string; requesterName: string }> 
 // Las contraseñas NO viven aquí: se validan en el servidor vía /api/auth.
 const DESIGNER_USERS = ["Juan David", "Eliana", "Verónica", "Caleb"];
 
-// ─── Operadores (Quota, Juan) ───
+// ─── Operadores (Juan). "Quota" pasó a ser el perfil Comercial ───
 // Perfiles con mismos permisos que CM pero cada uno con su nombre propio.
 // NO acceden al panel interno de diseñadores ni a la IA Andromeda.
-const OPERATOR_USER_LIST = ["Quota", "Juan"];
+const OPERATOR_USER_LIST = ["Juan"];
 
 // ─── DIRECTIVOS (Andres, Sebastian, Roberto) ───
 // Mismos permisos que CM/operador. Label en UI: "DIRECTIVOS".
@@ -321,8 +322,8 @@ type NotificationItem = {
 export default function GanaPlayMainApp() {
   // Sesión: localStorage = "recordar" (persiste al cerrar); sessionStorage =
   // solo esta pestaña. Se restaura de cualquiera de las dos.
-  const [role, setRole] = useState<"admin" | "cm" | "designer" | "operator" | "administrative" | null>(() => {
-    try { return ((localStorage.getItem('gp_role') || sessionStorage.getItem('gp_role')) as "admin" | "cm" | "designer" | "operator" | "administrative" | null) || null; } catch { return null; }
+  const [role, setRole] = useState<"admin" | "cm" | "designer" | "operator" | "administrative" | "comercial" | null>(() => {
+    try { return ((localStorage.getItem('gp_role') || sessionStorage.getItem('gp_role')) as "admin" | "cm" | "designer" | "operator" | "administrative" | "comercial" | null) || null; } catch { return null; }
   });
   const [userName, setUserName] = useState<string>(() => {
     try { return localStorage.getItem('gp_userName') || sessionStorage.getItem('gp_userName') || ''; } catch { return ''; }
@@ -340,6 +341,7 @@ export default function GanaPlayMainApp() {
   // siguiente solicitud, y filtrarla provocaría IDs repetidos.
   // `visibles` es lo que ve cada perfil. El Operador (Quota, Juan) no ve las
   // solicitudes levantadas por el Trafficker.
+  const esComercial = role === 'comercial';
   const visibles = useMemo(
     () => (role === 'operator' ? requests.filter(r => !esSolicitudDelTrafficker(r)) : requests),
     [requests, role],
@@ -349,7 +351,7 @@ export default function GanaPlayMainApp() {
   // ── Login ──
   // Acceso principal: correo corporativo. "Acceso por rol" queda como respaldo.
   const [rememberMe, setRememberMe] = useState(() => { try { return localStorage.getItem('gp_remember') !== '0'; } catch { return true; } });
-  const [loginRole, setLoginRole] = useState<"admin" | "cm" | "designer" | "operator" | "administrative" | null>(null);
+  const [loginRole, setLoginRole] = useState<"admin" | "cm" | "designer" | "operator" | "administrative" | "comercial" | null>(null);
   // Panel "Mi perfil": cambio de contraseña personal.
   const [perfilOpen, setPerfilOpen] = useState(false);
   const [passActual, setPassActual] = useState("");
@@ -407,7 +409,7 @@ export default function GanaPlayMainApp() {
   const [requesterName, setRequesterName] = useState("");
   // Varios correos del solicitante (la entrega les llega a todos). Arranca con
   // los predeterminados; se pueden quitar o agregar más.
-  const [requesterEmails, setRequesterEmails] = useState<string[]>([...DEFAULT_REQUESTER_EMAILS]);
+  const [requesterEmails, setRequesterEmails] = useState<string[]>([]);
   const [emailInput, setEmailInput] = useState("");
   const [objective, setObjective] = useState("");
   const [channels, setChannels] = useState<string[]>([]);
@@ -466,6 +468,8 @@ export default function GanaPlayMainApp() {
 
   // ── Calendario semanal ──
   const [weekDays, setWeekDays] = useState<{ dateStr: string; dayName: string; dayNum: number; monthName: string; isToday: boolean; isMonday: boolean }[]>([]);
+  // Semanas mostradas en Planeación, en pasos de 2 (0 = esta semana y la que viene).
+  const [desplazamientoSemanas, setDesplazamientoSemanas] = useState(0);
 
   // ─── Carga persistente desde Firebase + copia de seguridad local ───
   useEffect(() => {
@@ -509,12 +513,15 @@ export default function GanaPlayMainApp() {
     return () => { unsubReq(); unsubChat(); };
   }, []);
 
+  // Planeación muestra dos semanas. `desplazamiento` las mueve de dos en dos
+  // (0 = la semana actual y la siguiente; -2 = las dos anteriores…), para poder
+  // mirar lo ya entregado o planificar más adelante.
   useEffect(() => {
     const curr = new Date();
     const todayDow = curr.getDay();
     const diffToMonday = todayDow === 0 ? -6 : 1 - todayDow;
     const monday = new Date(curr);
-    monday.setDate(curr.getDate() + diffToMonday);
+    monday.setDate(curr.getDate() + diffToMonday + desplazamientoSemanas * 7);
     const days = [];
     for (let i = 0; i < 14; i++) {
       const d = new Date(monday);
@@ -529,7 +536,10 @@ export default function GanaPlayMainApp() {
       });
     }
     setWeekDays(days);
-    setDeliveryDate(curr.toISOString().split('T')[0]);
+  }, [desplazamientoSemanas]);
+
+  useEffect(() => {
+    setDeliveryDate(new Date().toISOString().split('T')[0]);
   }, []);
 
   useEffect(() => {
@@ -620,10 +630,11 @@ export default function GanaPlayMainApp() {
     const def = PROFILE_DEFAULTS[role];
     if (def?.area) setArea(def.area);
     setRequesterName(def?.requesterName || userName);
-    // Precarga: correo del propio usuario (para que también reciba la entrega)
-    // + los correos predeterminados. Se pueden quitar o agregar más.
+    // Solo el correo de quien está pidiendo la pieza. Antes se precargaban
+    // tres correos fijos y la entrega le llegaba a gente que no la pidió;
+    // quien quiera sumar a alguien lo agrega a mano.
     const own = emailForUser(userName) || (role === 'admin' ? DEFAULT_TRAFFICKER_EMAIL : '');
-    setRequesterEmails(Array.from(new Set([own, ...DEFAULT_REQUESTER_EMAILS].map(e => e.trim()).filter(Boolean))));
+    setRequesterEmails(own ? [own.trim()] : []);
     // Community Manager: el formato de redes ya viene sugerido (menos clics).
     if (role === 'cm') setDimensions(prev => prev.length ? prev : [DEFAULT_SOCIAL_DIMENSION]);
   }, [role, userName]);
@@ -737,7 +748,7 @@ export default function GanaPlayMainApp() {
   const resetCreateForm = () => {
     setTitleStr(""); setCopyStr(""); setDimensions([]); setCustomDim(""); setCountries([]); setChannels([]);
     setReferenceImgs([]); setReferenceFiles([]); setPriority("Medio"); setFormat("static"); setRequestKind("Nueva Línea Gráfica");
-    setRequesterName(""); setRequesterEmails([...DEFAULT_REQUESTER_EMAILS]); setEmailInput(""); setObjective(""); setArea(AREAS[0]);
+    setRequesterName(""); setRequesterEmails([]); setEmailInput(""); setObjective(""); setArea(AREAS[0]);
     setInitialComment(""); setInitialCommentImgs([]);
   };
   const openCreateRequest = () => {
@@ -748,7 +759,7 @@ export default function GanaPlayMainApp() {
     if (def?.area) setArea(def.area);
     setRequesterName(def?.requesterName || userName);
     const own = emailForUser(userName) || (role === 'admin' ? DEFAULT_TRAFFICKER_EMAIL : '');
-    setRequesterEmails(Array.from(new Set([own, ...DEFAULT_REQUESTER_EMAILS].map(e => e.trim()).filter(Boolean))));
+    setRequesterEmails(own ? [own.trim()] : []);
     setCreateModalOpen(true);
   };
   const openEditRequest = (req: RequestType) => {
@@ -1796,6 +1807,32 @@ export default function GanaPlayMainApp() {
     }
   };
 
+  /**
+   * Arrastrar una solicitud de una columna a otra cambia su estado.
+   *
+   * Es cosa del equipo de Diseño, que es quien mueve el trabajo; antes había
+   * que abrir la ficha y usar el desplegable para cada una.
+   */
+  const puedeArrastrarEstados = role === 'designer';
+
+  const handleDropOnStatus = async (nuevoEstado: RequestStatus) => {
+    if (!draggedReqId || !puedeArrastrarEstados) return;
+    const req = requests.find(r => r.id === draggedReqId);
+    setDraggedReqId(null);
+    if (!req || req.status === nuevoEstado) return;
+    if (req.status === 'Declinada') { addToast('Una solicitud declinada no cambia de estado.', 'error'); return; }
+    try {
+      await updateDoc(doc(db, "requests", req.id), {
+        status: nuevoEstado,
+        history: arrayUnion({ action: `Estado: ${req.status} → ${nuevoEstado}`, by: userName, at: new Date().toISOString() }),
+        updatedAt: serverTimestamp(),
+      });
+      addToast(`${req.id} → ${nuevoEstado}`, 'success');
+    } catch (err: unknown) {
+      addToast('No se pudo cambiar el estado: ' + (err instanceof Error ? err.message : 'error'), 'error');
+    }
+  };
+
   const handleDropOnDay = async (dateStr: string) => {
     if (!draggedReqId) return;
     try {
@@ -1913,7 +1950,10 @@ export default function GanaPlayMainApp() {
       setRole(data.role);
       setUserName(data.userName);
       // Los diseñadores entran directo a su Centro de Diseño (menos clics).
-      setActiveTab(data.role === "designer" ? "Equipo Diseño" : "Tablero Kanban");
+      setActiveTab(
+        data.role === "designer" ? "Equipo Diseño"
+        : data.role === "comercial" ? "Promocionales"
+        : "Tablero Kanban");
       // Persistencia de sesión:
       //  - "Recordar" → localStorage (sigue logueado al reabrir; no reescribe nada).
       //  - Sin recordar → solo sessionStorage (se cierra al cerrar la pestaña).
@@ -1942,6 +1982,125 @@ export default function GanaPlayMainApp() {
       setLoginLoading(false);
     }
   }, [nombreElegido, loginRole, loginPass, loginDesignerName, loginOperatorName, loginAdministrativeName, rememberMe]);
+
+  /**
+   * Cierra la ventana emergente que esté abierta, de la más interna a la más
+   * externa. Devuelve true si cerró algo.
+   *
+   * Lo usan dos cosas: la tecla Escape y el botón "atrás" del navegador. Antes
+   * no había ninguna de las dos: Escape no hacía nada, y "atrás" estando en una
+   * solicitud sacaba de la plataforma entera en vez de cerrar la ficha.
+   */
+  const cerrarCapaSuperior = useCallback((): boolean => {
+    if (lightboxImage) { setLightboxImage(null); return true; }
+    if (deleteModalOpen) { setDeleteModalOpen(null); return true; }
+    if (declineModalOpen) { setDeclineModalOpen(null); return true; }
+    if (perfilOpen) { setPerfilOpen(false); return true; }
+    if (createModalOpen) { setCreateModalOpen(false); setEditingReqId(null); return true; }
+    if (modalOpen) { setModalOpen(false); return true; }
+    if (chatOpen) { setChatOpen(false); return true; }
+    if (notifPanelOpen) { setNotifPanelOpen(false); return true; }
+    return false;
+  }, [lightboxImage, deleteModalOpen, declineModalOpen, perfilOpen, createModalOpen, modalOpen, chatOpen, notifPanelOpen]);
+
+  // ── Escape cierra lo que esté abierto ──
+  useEffect(() => {
+    const alPulsar = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      // Si el foco está en un desplegable abierto, deja que Escape lo cierre a él.
+      const activo = document.activeElement;
+      if (activo instanceof HTMLSelectElement) return;
+      if (cerrarCapaSuperior()) e.preventDefault();
+    };
+    window.addEventListener('keydown', alPulsar);
+    return () => window.removeEventListener('keydown', alPulsar);
+  }, [cerrarCapaSuperior]);
+
+  // ── El botón "atrás" cierra la ventana abierta, no sale de la plataforma ──
+  // Con cada ventana que se abre se apila una entrada de historial; al
+  // retroceder, se consume esa entrada y solo se cierra la ventana.
+  const hayAlgoAbierto = Boolean(
+    lightboxImage || deleteModalOpen || declineModalOpen || perfilOpen || createModalOpen || modalOpen || chatOpen
+  );
+  const capasApiladas = useRef(0);
+
+  useEffect(() => {
+    if (hayAlgoAbierto && capasApiladas.current === 0) {
+      capasApiladas.current = 1;
+      window.history.pushState({ gpCapa: true }, '');
+    } else if (!hayAlgoAbierto && capasApiladas.current > 0) {
+      // Se cerró desde la propia interfaz: se retira la entrada que sobra.
+      capasApiladas.current = 0;
+      if (window.history.state?.gpCapa) window.history.back();
+    }
+  }, [hayAlgoAbierto]);
+
+  useEffect(() => {
+    const alRetroceder = () => {
+      capasApiladas.current = 0;
+      if (cerrarCapaSuperior()) {
+        // Se cerró una ventana; se repone la entrada para que el siguiente
+        // "atrás" siga sin sacar a nadie de la plataforma.
+        window.history.pushState({ gpCapa: true }, '');
+        capasApiladas.current = 1;
+      }
+    };
+    window.addEventListener('popstate', alRetroceder);
+    return () => window.removeEventListener('popstate', alRetroceder);
+  }, [cerrarCapaSuperior]);
+
+  /**
+   * Enlace directo a una solicitud: `…/?solicitud=GP6812`.
+   *
+   * Sirve para pasarle a alguien "mira ESTA" por WhatsApp o correo sin tener
+   * que explicarle dónde buscarla: al abrirlo, la ficha se abre sola. Quien lo
+   * reciba necesita su acceso de siempre; el enlace no salta el login.
+   */
+  const enlaceDeSolicitud = useCallback((id: string) => publicLink(`/?solicitud=${encodeURIComponent(id)}`), []);
+
+  const copiarEnlaceSolicitud = useCallback(async (id: string) => {
+    const url = enlaceDeSolicitud(id);
+    try {
+      await navigator.clipboard.writeText(url);
+      addToast(`Enlace de ${id} copiado.`, 'success');
+    } catch {
+      addToast(url, 'info');   // sin permiso de portapapeles: al menos se ve
+    }
+  }, [enlaceDeSolicitud, addToast]);
+
+  // Abre sola la solicitud que venga en la dirección (?solicitud=GP…).
+  //
+  // OJO con rendirse a la primera: el tablero se pinta antes con la copia
+  // local, que puede no tener todavía la solicitud del enlace. Si se diera por
+  // "no encontrada" en esa primera pasada, a quien recibe el enlace le saldría
+  // un error con una solicitud que sí existe. Se sigue intentando hasta que
+  // llegan los datos del servidor.
+  const solicitudAbiertaPorEnlace = useRef(false);
+  const esperandoEnlaceDesde = useRef<number | null>(null);
+  useEffect(() => {
+    if (solicitudAbiertaPorEnlace.current) return;
+    let pedida = "";
+    try { pedida = new URLSearchParams(window.location.search).get('solicitud') || ""; } catch { return; }
+    if (!pedida) return;
+
+    const encontrada = requests.find(r => r.id === pedida);
+    if (encontrada) {
+      solicitudAbiertaPorEnlace.current = true;
+      setSelectedReq(encontrada);
+      setModalOpen(true);
+      try { window.history.replaceState({}, '', window.location.pathname); } catch { /* */ }
+      return;
+    }
+
+    if (esperandoEnlaceDesde.current === null) esperandoEnlaceDesde.current = Date.now();
+    const esperando = Date.now() - esperandoEnlaceDesde.current;
+    // Solo tras darle tiempo al servidor se declara que no existe.
+    if (!loadingData && requests.length > 0 && esperando > 12_000) {
+      solicitudAbiertaPorEnlace.current = true;
+      addToast(`No encontramos la solicitud ${pedida}.`, 'error');
+      try { window.history.replaceState({}, '', window.location.pathname); } catch { /* */ }
+    }
+  }, [requests, loadingData, addToast]);
 
   // Correo de quien está usando la app: el que escribió al entrar, o el que le
   // corresponde por nombre en el directorio (quien entró por el menú de roles).
@@ -2039,6 +2198,12 @@ export default function GanaPlayMainApp() {
     await Promise.all(unread.map(n => updateDoc(doc(db, "notifications", n.id), { read: true }).catch(() => {})));
   }, [firestoreNotifs]);
 
+  // Si Comercial traía guardada una pestaña que ya no le corresponde (o cambió
+  // de perfil en el mismo navegador), se le lleva a la suya.
+  useEffect(() => {
+    if (esComercial && !['Promocionales', 'CMR'].includes(activeTab)) setActiveTab('Promocionales');
+  }, [esComercial, activeTab]);
+
   const navItemStyle = (isActive: boolean): React.CSSProperties => ({
     display: 'flex', alignItems: 'center', gap: '8px', padding: '9px 15px', borderRadius: '10px', cursor: 'pointer',
     color: isActive ? 'var(--button-text)' : 'var(--text-secondary)', fontWeight: isActive ? 700 : 600,
@@ -2051,7 +2216,8 @@ export default function GanaPlayMainApp() {
     const ROLE_CARDS = [
       { key: 'admin',          icon: '⚡', label: 'Trafficker',         sub: 'Gestión total' },
       { key: 'cm',             icon: '🌐', label: 'Community Manager',  sub: 'Redes y contenido' },
-      { key: 'operator',       icon: '👤', label: 'Operador',           sub: 'Quota · Juan' },
+      { key: 'operator',       icon: '👤', label: 'Operador',           sub: 'Juan' },
+      { key: 'comercial',      icon: '🏷️', label: 'Comercial',          sub: 'Promocionales y CMR' },
       { key: 'administrative', icon: '💼', label: 'DIRECTIVOS',         sub: 'Andres · Sebastian · Roberto' },
       // Diseño sigue en el menú: quitarlo obligaba a todo el equipo a cambiar
       // su forma de entrar. Lo que separa el acceso NO es esconder la tarjeta,
@@ -2082,7 +2248,7 @@ export default function GanaPlayMainApp() {
                     const active = loginRole === card.key;
                     return (
                       <div key={card.key}
-                        onClick={() => { setLoginRole(card.key as "admin" | "cm" | "designer" | "operator" | "administrative"); setLoginPass(''); setLoginDesignerName(''); setLoginOperatorName(''); setLoginAdministrativeName(''); setLoginError(''); }}
+                        onClick={() => { setLoginRole(card.key as "admin" | "cm" | "designer" | "operator" | "administrative" | "comercial"); setLoginPass(''); setLoginDesignerName(''); setLoginOperatorName(''); setLoginAdministrativeName(''); setLoginError(''); }}
                         style={{
                           background: active ? 'var(--accent-soft)' : 'var(--panel-bg)',
                           border: `1.5px solid ${active ? 'var(--accent-color)' : 'var(--border-color)'}`,
@@ -2214,6 +2380,8 @@ export default function GanaPlayMainApp() {
                 ? '⚡ Trafficker'
                 : role === 'cm'
                 ? '🌐 Community Manager'
+                : role === 'comercial'
+                ? '🏷️ Comercial'
                 : role === 'operator'
                 ? `👤 ${userName}`
                 : role === 'administrative'
@@ -2263,6 +2431,9 @@ export default function GanaPlayMainApp() {
             aparecen en otras partes de la pantalla (p. ej. "Pendientes"
             también es una estadística del Centro de Diseño). */}
         <div data-testid="menu-principal" style={{ display: 'flex', gap: '6px', marginBottom: '22px', borderBottom: '1px solid var(--border-color)', paddingBottom: '14px', flexWrap: 'wrap' }}>
+          {/* El perfil Comercial no trabaja con el tablero de solicitudes:
+              solo con sus dos carpetas (Promocionales y CMR). */}
+          {!esComercial && <>
           <div style={navItemStyle(activeTab === 'Tablero Kanban')} onClick={() => setActiveTab('Tablero Kanban')}><Calendar size={15} /> Planeación</div>
           <div style={navItemStyle(activeTab === 'Calendario Entrega')} onClick={() => setActiveTab('Calendario Entrega')}><Layout size={15} /> Por estado</div>
           {(role === 'admin' || role === 'cm' || role === 'operator' || role === 'administrative') && (
@@ -2280,10 +2451,14 @@ export default function GanaPlayMainApp() {
           )}
           <div style={navItemStyle(activeTab === 'Historial')} onClick={() => setActiveTab('Historial')}><Clock size={15} /> Historial</div>
           <div style={navItemStyle(activeTab === 'Tabla Principal')} onClick={() => setActiveTab('Tabla Principal')}><List size={15} /> Tabla</div>
-          {role !== 'operator' && (
+          </>}
+          {role !== 'operator' && !esComercial && (
             <div style={navItemStyle(activeTab === 'Redes Sociales')} onClick={() => setActiveTab('Redes Sociales')}><CalendarDays size={15} /> Redes Sociales</div>
           )}
           <div style={navItemStyle(activeTab === 'Promocionales')} onClick={() => setActiveTab('Promocionales')}><Megaphone size={15} /> Promocionales</div>
+          {(esComercial || role === 'admin') && (
+            <div style={navItemStyle(activeTab === 'CMR')} onClick={() => setActiveTab('CMR')}><FolderKanban size={15} /> CMR</div>
+          )}
           {(role === 'admin' || role === 'cm') && (
             <div style={navItemStyle(activeTab === 'Contenido Influencers')} onClick={() => setActiveTab('Contenido Influencers')}><Users size={15} /> Contenido Influencers</div>
           )}
@@ -2309,7 +2484,16 @@ export default function GanaPlayMainApp() {
               const colCards = visibles.filter(req => req.status === col.id);
               const colColor = STATUS_TEXT_COLORS[col.id];
               return (
-                <div key={col.id} style={{ minWidth: '300px', width: '300px', background: 'var(--surface-1)', borderRadius: '14px', padding: '14px', border: '1px solid var(--border-color)', display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                <div key={col.id}
+                  style={{ minWidth: '300px', width: '300px', background: 'var(--surface-1)', borderRadius: '14px', padding: '14px', border: '1px solid var(--border-color)', display: 'flex', flexDirection: 'column', gap: '12px', transition: 'background 0.15s ease' }}
+                  onDragOver={e => { if (!puedeArrastrarEstados) return; e.preventDefault(); (e.currentTarget as HTMLElement).style.background = 'var(--surface-2)'; }}
+                  onDragLeave={e => { (e.currentTarget as HTMLElement).style.background = 'var(--surface-1)'; }}
+                  onDrop={e => {
+                    (e.currentTarget as HTMLElement).style.background = 'var(--surface-1)';
+                    if (!puedeArrastrarEstados) return;
+                    e.preventDefault();
+                    handleDropOnStatus(col.id as RequestStatus);
+                  }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '5px 12px', background: STATUS_COLORS[col.id], borderRadius: '20px', width: 'fit-content' }}>
                     <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: colColor }} />
                     <span style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)' }}>{col.title} <span style={{ color: colColor, marginLeft: '4px' }}>{colCards.length}</span></span>
@@ -2322,7 +2506,10 @@ export default function GanaPlayMainApp() {
                   )}
                   {colCards.map(c => (
                     <div key={c.id} className="request-card card"
-                      style={{ padding: '14px', cursor: 'pointer', borderLeft: `4px solid ${priorityConfig[c.priority ?? 'Medio'].text}` }}
+                      draggable={puedeArrastrarEstados}
+                      style={{ padding: '14px', cursor: puedeArrastrarEstados ? 'grab' : 'pointer', borderLeft: `4px solid ${priorityConfig[c.priority ?? 'Medio'].text}` }}
+                      onDragStart={e => { setDraggedReqId(c.id); (e.currentTarget as HTMLElement).style.opacity = '0.5'; }}
+                      onDragEnd={e => { (e.currentTarget as HTMLElement).style.opacity = '1'; }}
                       onClick={() => { setSelectedReq(c); setModalOpen(true); }}>
                       <div style={{ display: 'flex', alignItems: 'flex-start', gap: '10px' }}>
                         <FileText size={18} color="var(--text-muted)" style={{ flexShrink: 0, marginTop: '2px' }} />
@@ -2438,8 +2625,34 @@ export default function GanaPlayMainApp() {
               )}
             </div>
           );
+          const rango = week1[0] && week2[6]
+            ? `${week1[0].dayNum} ${week1[0].monthName} — ${week2[6].dayNum} ${week2[6].monthName}`
+            : '';
           return (
             <div>
+              {/* Navegación entre semanas: antes solo se veía la semana actual
+                  y la siguiente, sin forma de mirar atrás ni más adelante. */}
+              <div className="card" style={{ padding: '10px 14px', marginBottom: '14px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '10px' }}>
+                <button className="btn-ghost" title="Dos semanas antes"
+                  style={{ padding: '8px 12px', borderRadius: '9px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px', width: 'auto', fontSize: '12.5px' }}
+                  onClick={() => setDesplazamientoSemanas(n => n - 2)}>
+                  <ChevronLeft size={16} /> Anteriores
+                </button>
+                <div style={{ textAlign: 'center' }}>
+                  <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)' }}>{rango}</div>
+                  {desplazamientoSemanas !== 0 && (
+                    <button onClick={() => setDesplazamientoSemanas(0)}
+                      style={{ background: 'none', border: 'none', color: 'var(--accent-color)', fontSize: '11px', fontWeight: 700, cursor: 'pointer', padding: 0, width: 'auto', textDecoration: 'underline' }}>
+                      Volver a esta semana
+                    </button>
+                  )}
+                </div>
+                <button className="btn-ghost" title="Dos semanas después"
+                  style={{ padding: '8px 12px', borderRadius: '9px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px', width: 'auto', fontSize: '12.5px' }}
+                  onClick={() => setDesplazamientoSemanas(n => n + 2)}>
+                  Siguientes <ChevronRight size={16} />
+                </button>
+              </div>
               <div style={{ fontSize: '12px', color: 'var(--text-secondary)', marginBottom: '10px', textTransform: 'uppercase', fontWeight: 700, letterSpacing: '0.8px' }}>📅 Semana 1</div>
               {renderWeek(week1)}
               <div style={{ fontSize: '12px', color: 'var(--text-secondary)', marginBottom: '10px', textTransform: 'uppercase', fontWeight: 700, letterSpacing: '0.8px' }}>📅 Semana 2</div>
@@ -2850,6 +3063,10 @@ export default function GanaPlayMainApp() {
 
         {activeTab === 'Contenido Influencers' && (role === 'admin' || role === 'cm') && (
           <InfluencerModule role={role} userName={userName} addToast={addToast} />
+        )}
+
+        {activeTab === 'CMR' && (esComercial || role === 'admin') && (
+          <PromoModule tablero="cmr" role={role} userName={userName} addToast={addToast} />
         )}
 
         {activeTab === 'Promocionales' && (
@@ -3361,6 +3578,21 @@ export default function GanaPlayMainApp() {
                 {/* Spacer flexible para empujar acciones destructivas a la derecha */}
                 <div style={{ flex: 1 }} />
 
+                {/* Copiar el enlace de ESTA solicitud, para pasársela a alguien
+                    tal cual, sin explicarle dónde buscarla. */}
+                <button
+                  onClick={() => copiarEnlaceSolicitud(selectedReq.id)}
+                  title="Copiar el enlace de esta solicitud"
+                  style={{
+                    padding: '9px 16px', fontSize: '12.5px', fontWeight: 700,
+                    background: 'var(--surface-1)', color: 'var(--text-secondary)',
+                    border: '1px solid var(--border-color)', borderRadius: '10px',
+                    cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px', width: 'auto',
+                  }}
+                >
+                  <Link2 size={14} /> Copiar enlace
+                </button>
+
                 {/* Editar solicitud — todos los perfiles (incluidos diseñadores) */}
                 {selectedReq.status !== 'Declinada' && (
                   <button
@@ -3464,7 +3696,11 @@ export default function GanaPlayMainApp() {
                       )}
                       <div style={{ background: 'var(--surface-1)', padding: '10px 12px', borderRadius: '10px', border: '1px solid var(--border-color)' }}>
                         <div style={{ fontSize: '10px', fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.8px', marginBottom: '4px' }}>Copy / Instrucción</div>
-                        <p style={{ margin: 0, fontSize: '13px', lineHeight: 1.6, color: 'var(--text-primary)' }}>{selectedReq.copy}</p>
+                        {/* `pre-wrap` respeta los saltos de línea y los espacios
+                            tal como los escribió quien pidió la pieza: si puso
+                            una palabra por renglón, así se lee. Antes se veía
+                            todo de corrido. */}
+                        <p style={{ margin: 0, fontSize: '13px', lineHeight: 1.6, color: 'var(--text-primary)', whiteSpace: 'pre-wrap' }}>{selectedReq.copy}</p>
                       </div>
                       <div style={{ background: 'var(--surface-1)', padding: '10px 12px', borderRadius: '10px', border: '1px solid var(--border-color)' }}>
                         <div style={{ fontSize: '10px', fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.8px', marginBottom: '6px' }}>Dimensiones</div>
@@ -3714,6 +3950,26 @@ export default function GanaPlayMainApp() {
                         <br />Hasta {formatMB(MAX_FILE_BYTES)} por archivo ({formatMB(MAX_VIDEO_BYTES)} en video). Puedes seleccionar varios a la vez.
                       </p>
                     </>
+                  )}
+
+                  {/* Con la entrega hecha, compartirla es un clic: enlace a la
+                      solicitud con sus piezas, para pasarlo por WhatsApp o
+                      correo como se hacía con Drive. */}
+                  {selectedReq.creatives.length > 0 && (
+                    <div style={{ display: 'flex', gap: '8px', marginBottom: '14px', flexWrap: 'wrap' }}>
+                      <button className="btn" style={{ flex: 1, minWidth: '180px', padding: '10px 14px', fontSize: '12.5px' }}
+                        onClick={() => copiarEnlaceSolicitud(selectedReq.id)}>
+                        <Link2 size={15} /> Compartir entrega
+                      </button>
+                      <button className="btn-secondary" style={{ padding: '10px 14px', fontSize: '12.5px', borderRadius: '10px', cursor: 'pointer', width: 'auto' }}
+                        title="Enviar por WhatsApp"
+                        onClick={() => {
+                          const texto = `Entrega lista — ${selectedReq.id}: ${selectedReq.title}\n${enlaceDeSolicitud(selectedReq.id)}`;
+                          window.open(`https://wa.me/?text=${encodeURIComponent(texto)}`, '_blank', 'noopener');
+                        }}>
+                        WhatsApp
+                      </button>
+                    </div>
                   )}
 
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>

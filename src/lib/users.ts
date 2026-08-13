@@ -28,7 +28,7 @@ export const USER_DIRECTORY: Record<string, string> = {
   "Roberto": "roberto.andrade@ganaplay.com",
   "Juan": "juan.gutierrez@ganaplay.com",
   // Operadores y Directivos restantes: completar cuando sepamos sus emails.
-  "Quota": "",
+  "Comercial": "",
   "Andres": "",
   "Sebastian": "",
 };
@@ -51,8 +51,8 @@ export const SUGGESTED_REQUESTER_EMAILS: string[] = Array.from(
   ]),
 );
 
-/** Lista de operadores válidos (Quota, Juan) — espejo del backend. */
-export const OPERATOR_USERS = ["Quota", "Juan"] as const;
+/** Lista de operadores válidos — espejo del backend. "Quota" pasó a Comercial. */
+export const OPERATOR_USERS = ["Juan"] as const;
 
 /**
  * Lista de DIRECTIVOS válidos (Andres, Sebastian, Roberto) — espejo del backend.

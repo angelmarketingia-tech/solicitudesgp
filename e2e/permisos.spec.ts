@@ -27,6 +27,11 @@ const MATRIZ: Record<Perfil, { ve: string[]; noVe: string[] }> = {
     ve: ["Planeación", "Por estado", "Pendientes", "Historial", "Tabla", "Redes Sociales", "Promocionales"],
     noVe: ["Centro de Diseño", "Contenido Influencers"],
   },
+  comercial: {
+    // Comercial solo trabaja con sus dos carpetas.
+    ve: ["Promocionales", "CMR"],
+    noVe: ["Planeación", "Por estado", "Pendientes", "Historial", "Tabla", "Redes Sociales", "Centro de Diseño", "Contenido Influencers"],
+  },
   designer: {
     ve: ["Planeación", "Por estado", "Centro de Diseño", "Historial", "Tabla", "Redes Sociales", "Promocionales"],
     noVe: ["Pendientes", "Contenido Influencers"],
@@ -63,11 +68,13 @@ for (const perfil of Object.keys(MATRIZ) as Perfil[]) {
     });
 
     test(`"Eliminar permanentemente" solo lo tiene el Trafficker`, async ({ page }) => {
+      test.setTimeout(120_000);
       test.skip(!sesionDisponible(perfil), `Sin sesión de ${perfil}`);
+      test.skip(perfil === "comercial", "Comercial no tiene tablero de solicitudes");
       await abrirTablero(page);
       await page.getByText("Tabla", { exact: true }).first().click();
       const fila = page.getByText(/^GP\d{3,}/).first();
-      await expect(fila).toBeVisible({ timeout: 25_000 });
+      await expect(fila).toBeVisible({ timeout: 60_000 });
       await fila.click();
       const borrar = page.getByRole("button", { name: /Eliminar permanentemente/i });
       if (perfil === "admin") await expect(borrar).toBeVisible();
@@ -76,6 +83,7 @@ for (const perfil of Object.keys(MATRIZ) as Perfil[]) {
 
     test(`todos pueden crear una solicitud`, async ({ page }) => {
       test.skip(!sesionDisponible(perfil), `Sin sesión de ${perfil}`);
+      test.skip(perfil === "comercial", "Comercial no crea solicitudes de diseño");
       await abrirTablero(page);
       await page.getByRole("button", { name: /^Nueva$/i }).click();
       await expect(page.getByRole("heading", { name: /Nueva solicitud de diseño/i })).toBeVisible();

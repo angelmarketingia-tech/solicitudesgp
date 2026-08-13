@@ -20,7 +20,9 @@ import { checkRateLimit, getClientIp } from "@/lib/rate-limit";
  * Roles:
  *  - admin           → Trafficker. Acceso total + eliminación permanente.
  *  - cm              → Community Manager. Crea solicitudes, ve calendario.
- *  - operator        → Operadores (Quota, Juan). Mismos permisos
+ *  - comercial       → Equipo Comercial (antes "Quota"). Solo Promocionales
+ *                      y CMR; no ve el tablero de solicitudes.
+ *  - operator        → Operadores (Juan). Mismos permisos
  *                      que CM pero cada uno con su nombre propio.
  *  - administrative  → DIRECTIVOS (Andres, Sebastian, Roberto). Mismos
  *                      permisos que CM/operator, distinto perfil para
@@ -64,10 +66,10 @@ function expectedPasswordFor(role: Role): string {
 }
 
 const DESIGNER_USERS = ["Juan David", "Eliana", "Verónica", "Caleb"];
-const OPERATOR_USERS = ["Quota", "Juan"];
+const OPERATOR_USERS = ["Juan"];   // "Quota" pasó a ser el perfil Comercial
 const ADMINISTRATIVE_USERS = ["Andres", "Sebastian", "Roberto"];
 
-type Role = "admin" | "cm" | "designer" | "operator" | "administrative";
+type Role = "admin" | "cm" | "designer" | "operator" | "administrative" | "comercial";
 
 // ─── Directorio corporativo: correo → { rol, nombre } ────────────────────────
 // Cada persona entra con SU correo corporativo. La contraseña sigue siendo
@@ -240,6 +242,13 @@ export async function POST(req: Request) {
         );
       }
       return NextResponse.json({ ok: true, role, userName: "Trafficker" });
+    }
+
+    if (role === "comercial") {
+      if (password !== PASS_GENERAL) {
+        return NextResponse.json({ ok: false, error: "Contraseña incorrecta." }, { status: 401 });
+      }
+      return NextResponse.json({ ok: true, role, userName: "Comercial" });
     }
 
     if (role === "cm") {

@@ -17,13 +17,16 @@ test.afterAll(async () => {
   if (creadas.length) console.log(`Limpieza: ${creadas.length} solicitud(es) de prueba borradas.`);
 });
 
-/** Abre una solicitud concreta desde la vista de Tabla. */
+/**
+ * Abre una solicitud por su enlace directo.
+ *
+ * Antes se buscaba la fila en la Tabla, pero con 200+ solicitudes y varios
+ * navegadores a la vez los tiempos se disparaban y fallaba por reloj, no por
+ * un fallo real. El enlace directo va al grano.
+ */
 async function abrirSolicitud(page: import("@playwright/test").Page, id: string) {
-  await page.goto("/");
-  await page.getByText("Tabla", { exact: true }).first().click();
-  const fila = page.getByText(id, { exact: false }).first();
-  await expect(fila).toBeVisible({ timeout: 30_000 });
-  await fila.click();
+  await page.goto(`/?solicitud=${id}`);
+  await expect(page.getByRole("button", { name: /Copiar enlace/i })).toBeVisible({ timeout: 75_000 });
 }
 
 test.describe("Crear solicitudes", () => {
@@ -160,7 +163,9 @@ test.describe("Trabajar una solicitud", () => {
 
     await abrirSolicitud(page, id);
     const texto = `comentario de prueba ${Date.now()}`;
-    const caja = page.getByPlaceholder(/Escribe|mensaje|comentario/i).first();
+    // Ojo: con el Centro de Diseño detrás hay otra caja ("Mensaje al equipo").
+    // Esta es la del hilo de la solicitud.
+    const caja = page.getByPlaceholder(/Comentario o recomendación/i);
     await expect(caja).toBeVisible({ timeout: 20_000 });
     await caja.fill(texto);
     await caja.press("Enter");

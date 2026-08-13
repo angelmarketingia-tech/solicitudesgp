@@ -55,7 +55,7 @@ export default function PublicPromoPage({ params }: { params: Promise<{ code: st
       setSinConexion(false);
       const docSnap = snap.docs.find(d => {
         const b = d.data().board;
-        return b === "promo_config" || (b === "promo" && d.data().kind === "folder");
+        return b === "promo_config" || b === "cmr_config" || ((b === "promo" || b === "cmr") && d.data().kind === "folder");
       });
       // Sin red, Firestore responde desde su caché (vacía): eso no significa
       // que el enlace sea malo, sino que no hubo conexión.
@@ -86,7 +86,8 @@ export default function PublicPromoPage({ params }: { params: Promise<{ code: st
   // 2) Cargar todos los items de Promocionales (se acota abajo por subárbol).
   useEffect(() => {
     if (!rootId) { setItems([]); return; }
-    const qy = query(collection(db, "requests"), where("board", "==", "promo"));
+    // Los dos tableros tipo Drive comparten esta vista pública.
+    const qy = query(collection(db, "requests"), where("board", "in", ["promo", "cmr"]));
     const unsub = onSnapshot(qy, (snap) => setItems(snap.docs.map(d => itemFromDoc(d.id, d.data()))), () => { /* */ });
     return () => unsub();
   }, [rootId]);

@@ -14,7 +14,7 @@ import path from "path";
 import type { Page } from "@playwright/test";
 import { expect } from "@playwright/test";
 
-export type Perfil = "admin" | "cm" | "operator" | "administrative" | "designer";
+export type Perfil = "admin" | "cm" | "operator" | "administrative" | "designer" | "comercial";
 
 /** Contraseñas: SIEMPRE del entorno, nunca escritas en el código. */
 export const CREDENCIALES = {
@@ -34,9 +34,10 @@ export function passwordDe(perfil: Perfil): string {
 export const PERFILES: Record<Perfil, { tarjeta: string; nombre: string | null }> = {
   admin: { tarjeta: "Trafficker", nombre: null },
   cm: { tarjeta: "Community Manager", nombre: null },
-  operator: { tarjeta: "Operador", nombre: "Quota" },
+  operator: { tarjeta: "Operador", nombre: "Juan" },
   administrative: { tarjeta: "DIRECTIVOS", nombre: "Roberto" },
   designer: { tarjeta: "Diseñador", nombre: "Juan David" },
+  comercial: { tarjeta: "Comercial", nombre: null },
 };
 
 /** Fichero donde se guarda la sesión ya iniciada de cada perfil. */
@@ -61,8 +62,8 @@ export async function entrar(page: Page, perfil: Perfil, opts: { recordar?: bool
   await page.evaluate(() => { try { localStorage.clear(); sessionStorage.clear(); } catch { /* */ } });
   await page.reload();
 
-  await page.getByText(tarjeta, { exact: true }).click();
-  if (nombre) await page.getByRole("combobox").selectOption(nombre);
+  await page.getByText(tarjeta, { exact: true }).click({ timeout: 15_000 });
+  if (nombre) await page.getByRole("combobox").selectOption(nombre, { timeout: 15_000 });
   if (opts.recordar !== false) {
     const recordar = page.getByRole("checkbox").first();
     if (await recordar.isVisible().catch(() => false) && !(await recordar.isChecked())) await recordar.check();
