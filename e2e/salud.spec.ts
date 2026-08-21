@@ -46,9 +46,15 @@ test("la pantalla de acceso carga rápido y sin errores", async ({ page }) => {
   expect(erroresReales(errores)).toEqual([]);
 });
 
-test("los cinco perfiles están disponibles para entrar", async ({ page }) => {
+test("todos los perfiles siguen disponibles en el acceso por rol", async ({ page }) => {
   await page.goto("/");
-  for (const perfil of ["Trafficker", "Community Manager", "Operador", "DIRECTIVOS", "Diseñador"]) {
+  // La entrada principal es el correo corporativo; las tarjetas de rol viven
+  // detrás del enlace discreto.
+  await page.getByRole("button", { name: /^Acceso por rol$/i }).click();
+  for (const perfil of [
+    "Trafficker", "Community Manager", "Operador", "Comercial",
+    "Ejecutivo Comercial", "DIRECTIVOS", "Diseñador",
+  ]) {
     await expect(page.getByText(perfil, { exact: true })).toBeVisible();
   }
 });

@@ -14,7 +14,7 @@ import path from "path";
 import type { Page } from "@playwright/test";
 import { expect } from "@playwright/test";
 
-export type Perfil = "admin" | "cm" | "operator" | "administrative" | "designer" | "comercial";
+export type Perfil = "admin" | "cm" | "operator" | "administrative" | "designer" | "comercial" | "ejecutivo";
 
 /** Contraseñas: SIEMPRE del entorno, nunca escritas en el código. */
 export const CREDENCIALES = {
@@ -30,14 +30,20 @@ export function passwordDe(perfil: Perfil): string {
   return CREDENCIALES.general;
 }
 
-/** Tarjeta del login y nombre a elegir para cada perfil. */
-export const PERFILES: Record<Perfil, { tarjeta: string; nombre: string | null }> = {
-  admin: { tarjeta: "Trafficker", nombre: null },
-  cm: { tarjeta: "Community Manager", nombre: null },
-  operator: { tarjeta: "Operador", nombre: "Juan" },
-  administrative: { tarjeta: "DIRECTIVOS", nombre: "Roberto" },
-  designer: { tarjeta: "Diseñador", nombre: "Juan David" },
-  comercial: { tarjeta: "Comercial", nombre: null },
+/**
+ * Tarjeta del login, nombre a elegir y correo corporativo de cada perfil.
+ *
+ * Roberto dejó de ser DIRECTIVO: ahora es Ejecutivo Comercial, con su propia
+ * tarjeta y sin acceso a lo que levanta el Trafficker.
+ */
+export const PERFILES: Record<Perfil, { tarjeta: string; nombre: string | null; correo: string }> = {
+  admin: { tarjeta: "Trafficker", nombre: null, correo: "angel.vaca@ganaplay.com" },
+  cm: { tarjeta: "Community Manager", nombre: null, correo: "fernanda.monrroy@ganaplay.com" },
+  operator: { tarjeta: "Operador", nombre: "Juan", correo: "juan.gutierrez@ganaplay.com" },
+  administrative: { tarjeta: "DIRECTIVOS", nombre: "Andres", correo: "" },
+  designer: { tarjeta: "Diseñador", nombre: "Juan David", correo: "david.gutierrez@ganaplay.com" },
+  comercial: { tarjeta: "Comercial", nombre: null, correo: "comercial@ganaplay.com" },
+  ejecutivo: { tarjeta: "Ejecutivo Comercial", nombre: "Roberto", correo: "roberto.andrade@ganaplay.com" },
 };
 
 /** Fichero donde se guarda la sesión ya iniciada de cada perfil. */
@@ -50,25 +56,51 @@ export function faltaPassword(perfil: Perfil): boolean {
   return !passwordDe(perfil);
 }
 
+/** Deja la pantalla de acceso en blanco, sin sesión previa. */
+async function abrirAcceso(page: Page) {
+  await page.goto("/");
+  await page.evaluate(() => { try { localStorage.clear(); sessionStorage.clear(); } catch { /* */ } });
+  await page.reload();
+}
+
+/** Marca "Recordar" para que la sesión quede en localStorage (lo que guarda Playwright). */
+async function marcarRecordar(page: Page, recordar?: boolean) {
+  if (recordar === false) return;
+  const casilla = page.getByRole("checkbox").first();
+  if (await casilla.isVisible().catch(() => false) && !(await casilla.isChecked())) await casilla.check();
+}
+
 /**
- * Inicia sesión de verdad por la pantalla de roles.
- * `recordar` deja la sesión en localStorage, que es lo que Playwright guarda.
+ * Inicia sesión por el ACCESO POR ROL, que ahora vive tras el enlace discreto
+ * "Acceso por rol" de la pantalla principal.
  */
 export async function entrar(page: Page, perfil: Perfil, opts: { recordar?: boolean; password?: string } = {}) {
   const { tarjeta, nombre } = PERFILES[perfil];
   const pass = opts.password ?? passwordDe(perfil);
 
-  await page.goto("/");
-  await page.evaluate(() => { try { localStorage.clear(); sessionStorage.clear(); } catch { /* */ } });
-  await page.reload();
+  await abrirAcceso(page);
+  await page.getByRole("button", { name: /^Acceso por rol$/i }).click({ timeout: 15_000 });
 
   await page.getByText(tarjeta, { exact: true }).click({ timeout: 15_000 });
   if (nombre) await page.getByRole("combobox").selectOption(nombre, { timeout: 15_000 });
-  if (opts.recordar !== false) {
-    const recordar = page.getByRole("checkbox").first();
-    if (await recordar.isVisible().catch(() => false) && !(await recordar.isChecked())) await recordar.check();
-  }
+  await marcarRecordar(page, opts.recordar);
   await page.getByPlaceholder("••••••••••••").fill(pass);
+  await page.getByRole("button", { name: /Acceder al sistema/i }).click();
+}
+
+/** Inicia sesión por el ACCESO PRINCIPAL: correo corporativo + contraseña. */
+export async function entrarPorCorreo(
+  page: Page,
+  perfil: Perfil,
+  opts: { recordar?: boolean; password?: string; correo?: string } = {},
+) {
+  const correo = opts.correo ?? PERFILES[perfil].correo;
+  const pass = opts.password ?? passwordDe(perfil);
+
+  await abrirAcceso(page);
+  await page.getByPlaceholder("nombre.apellido@ganaplay.com").fill(correo);
+  await page.getByPlaceholder("••••••••••••").fill(pass);
+  await marcarRecordar(page, opts.recordar);
   await page.getByRole("button", { name: /Acceder al sistema/i }).click();
 }
 

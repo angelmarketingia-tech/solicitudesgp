@@ -27,6 +27,12 @@ const MATRIZ: Record<Perfil, { ve: string[]; noVe: string[] }> = {
     ve: ["Planeación", "Por estado", "Pendientes", "Historial", "Tabla", "Redes Sociales", "Promocionales"],
     noVe: ["Centro de Diseño", "Contenido Influencers"],
   },
+  ejecutivo: {
+    // Roberto: sus solicitudes, Promocionales y CMR. Nada de Redes Sociales,
+    // influencers ni el panel interno de Diseño.
+    ve: ["Planeación", "Por estado", "Pendientes", "Historial", "Tabla", "Promocionales", "CMR"],
+    noVe: ["Redes Sociales", "Centro de Diseño", "Contenido Influencers"],
+  },
   comercial: {
     // Comercial solo trabaja con sus dos carpetas.
     ve: ["Promocionales", "CMR"],
@@ -93,25 +99,32 @@ for (const perfil of Object.keys(MATRIZ) as Perfil[]) {
   });
 }
 
-test.describe("Quota no ve el trabajo del Trafficker", () => {
-  test("ve menos solicitudes que el Trafficker, y ninguna suya", async ({ browser }) => {
-    test.skip(!sesionDisponible("operator") || !sesionDisponible("admin"), "Faltan contraseñas");
+test.describe("El trabajo del Trafficker no se ve desde otros perfiles", () => {
+  const ids = async (browser: Parameters<Parameters<typeof test>[1]>[0]["browser"], perfil: Perfil): Promise<string[]> => {
+    const ctx = await browser.newContext({ storageState: ficheroSesion(perfil) });
+    const page = await ctx.newPage();
+    await page.goto("/");
+    await page.getByText("Tabla", { exact: true }).first().click();
+    await expect(page.getByText(/^GP\d{3,}/).first()).toBeVisible({ timeout: 60_000 });
+    const textos = await page.getByText(/^GP\d{3,}/).allTextContents();
+    await ctx.close();
+    return textos.map(t => (t.match(/GP\d+/) || [""])[0]).filter(Boolean);
+  };
 
-    const ids = async (perfil: Perfil): Promise<string[]> => {
-      const ctx = await browser.newContext({ storageState: ficheroSesion(perfil) });
-      const page = await ctx.newPage();
-      await page.goto("/");
-      await page.getByText("Tabla", { exact: true }).first().click();
-      await expect(page.getByText(/^GP\d{3,}/).first()).toBeVisible({ timeout: 25_000 });
-      const textos = await page.getByText(/^GP\d{3,}/).allTextContents();
-      await ctx.close();
-      return textos.map(t => (t.match(/GP\d+/) || [""])[0]).filter(Boolean);
-    };
-
-    const [todas, deQuota] = [await ids("admin"), await ids("operator")];
-    console.log(`Trafficker ve ${todas.length}; Quota ve ${deQuota.length}`);
-    expect(deQuota.length).toBeGreaterThan(0);
-    expect(deQuota.length).toBeLessThan(todas.length);
-    for (const id of deQuota) expect(todas).toContain(id);
-  });
+  // Operador (Juan) y Ejecutivo Comercial (Roberto) comparten la misma regla:
+  // ven su parte del tablero, nunca lo que levanta el Trafficker.
+  for (const perfil of ["operator", "ejecutivo"] as const) {
+    test(`${perfil} ve menos solicitudes que el Trafficker, y todas las suyas están en el tablero completo`, async ({ browser }) => {
+      // Carga el tablero ENTERO dos veces, con dos sesiones distintas: con el
+      // minuto por defecto se agotaba el tiempo cuando la suite va en paralelo.
+      test.setTimeout(180_000);
+      test.skip(!sesionDisponible(perfil) || !sesionDisponible("admin"), "Faltan contraseñas");
+      const todas = await ids(browser, "admin");
+      const suyas = await ids(browser, perfil);
+      console.log(`Trafficker ve ${todas.length}; ${perfil} ve ${suyas.length}`);
+      expect(suyas.length).toBeGreaterThan(0);
+      expect(suyas.length).toBeLessThan(todas.length);
+      for (const id of suyas) expect(todas).toContain(id);
+    });
+  }
 });

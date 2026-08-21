@@ -10,7 +10,7 @@ import path from "path";
 import { test as setup, expect } from "@playwright/test";
 import { entrar, ficheroSesion, faltaPassword, type Perfil } from "./helpers/sesion";
 
-const PERFILES: Perfil[] = ["admin", "cm", "operator", "administrative", "designer", "comercial"];
+const PERFILES: Perfil[] = ["admin", "cm", "operator", "administrative", "designer", "comercial", "ejecutivo"];
 
 /** Deja el fichero vacío: las pruebas de ese perfil se saltarán solas. */
 function marcarNoDisponible(perfil: Perfil, motivo: string) {

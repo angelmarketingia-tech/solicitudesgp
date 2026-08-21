@@ -7,7 +7,7 @@
  * Lo que garantiza: que la contraseña de un perfil NO abre otro.
  */
 import { test, expect } from "@playwright/test";
-import { entrar, passwordDe, faltaPassword, CREDENCIALES } from "./helpers/sesion";
+import { entrar, entrarPorCorreo, passwordDe, faltaPassword, CREDENCIALES } from "./helpers/sesion";
 
 // Un reintento: estas pruebas compiten con el límite de intentos de /api/auth
 // y con el bloqueo temporal de Firebase, que a plena carga pueden retrasar la
@@ -18,10 +18,33 @@ test.use({ storageState: { cookies: [], origins: [] } });
 
 const tablero = /Solicitudes de diseño/i;
 
-test("solo se entra por rol: no queda acceso por correo", async ({ page }) => {
+test("la puerta principal es el correo corporativo; el acceso por rol queda discreto", async ({ page }) => {
   await page.goto("/");
-  await expect(page.getByPlaceholder("nombre.apellido@ganaplay.com")).toHaveCount(0);
-  await expect(page.getByText(/acceso por correo/i)).toHaveCount(0);
+  await expect(page.getByPlaceholder("nombre.apellido@ganaplay.com")).toBeVisible();
+  // Las tarjetas de rol no se ven hasta pedirlas.
+  await expect(page.getByText("Trafficker", { exact: true })).toHaveCount(0);
+  await page.getByRole("button", { name: /^Acceso por rol$/i }).click();
+  await expect(page.getByText("Trafficker", { exact: true })).toBeVisible();
+});
+
+test("se entra con el correo corporativo y la contraseña", async ({ page }) => {
+  test.skip(faltaPassword("cm"), "Falta E2E_GENERAL_PASS");
+  await entrarPorCorreo(page, "cm");
+  await expect(page.getByRole("heading", { name: tablero })).toBeVisible({ timeout: 25_000 });
+});
+
+test("un correo que no está de alta no entra", async ({ page }) => {
+  test.skip(faltaPassword("cm"), "Falta E2E_GENERAL_PASS");
+  await entrarPorCorreo(page, "cm", { correo: "nadie@ganaplay.com" });
+  await expect(page.getByText(/incorrectos/i)).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByRole("heading", { name: tablero })).toHaveCount(0);
+});
+
+test("el Ejecutivo Comercial entra con su correo", async ({ page }) => {
+  test.skip(faltaPassword("ejecutivo"), "Falta E2E_GENERAL_PASS");
+  await entrarPorCorreo(page, "ejecutivo");
+  await expect(page.getByRole("heading", { name: tablero })).toBeVisible({ timeout: 25_000 });
+  await expect(page.getByText(/Roberto/).first()).toBeVisible();
 });
 
 test("el Trafficker entra con su contraseña", async ({ page }) => {
@@ -78,7 +101,7 @@ test("al cerrar sesión se vuelve a la pantalla de acceso", async ({ page }) => 
   await entrar(page, "cm");
   await expect(page.getByRole("heading", { name: tablero })).toBeVisible({ timeout: 25_000 });
   await page.getByRole("button", { name: /Cerrar sesión/i }).click();
-  await expect(page.getByText("Trafficker", { exact: true })).toBeVisible({ timeout: 15_000 });
+  await expect(page.getByPlaceholder("nombre.apellido@ganaplay.com")).toBeVisible({ timeout: 15_000 });
   await page.reload();
   await expect(page.getByRole("heading", { name: tablero })).toHaveCount(0);
 });

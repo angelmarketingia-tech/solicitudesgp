@@ -158,7 +158,13 @@ const PROFILE_DEFAULTS: Record<string, { area: string; requesterName: string }> 
   designer:       { area: "Redes Sociales", requesterName: "" },
   operator:       { area: "Pauta",          requesterName: "" },
   administrative: { area: "Pauta",          requesterName: "" },
+  ejecutivo:      { area: "Pauta",          requesterName: "" },
 };
+
+// ─── Perfiles del sistema ───
+// Espejo de `src/lib/team.ts`, que es quien manda: el rol lo decide SIEMPRE el
+// servidor a partir del correo. Aquí solo se usa para pintar la interfaz.
+type UserRole = "admin" | "cm" | "designer" | "operator" | "administrative" | "comercial" | "ejecutivo";
 
 // ─── Diseñadores del sistema ───
 // Las contraseñas NO viven aquí: se validan en el servidor vía /api/auth.
@@ -169,10 +175,15 @@ const DESIGNER_USERS = ["Juan David", "Eliana", "Verónica", "Caleb"];
 // NO acceden al panel interno de diseñadores ni a la IA Andromeda.
 const OPERATOR_USER_LIST = ["Juan"];
 
-// ─── DIRECTIVOS (Andres, Sebastian, Roberto) ───
+// ─── DIRECTIVOS (Andres, Sebastian) ───
 // Mismos permisos que CM/operador. Label en UI: "DIRECTIVOS".
 // Internamente el rol se llama "administrative" (clave técnica histórica).
-const ADMINISTRATIVE_USER_LIST = ["Andres", "Sebastian", "Roberto"];
+const ADMINISTRATIVE_USER_LIST = ["Andres", "Sebastian"];
+
+// ─── Ejecutivos comerciales (Roberto) ───
+// Levantan y siguen sus solicitudes, y trabajan Promocionales y CMR. NO ven las
+// solicitudes que levanta el Trafficker ni el Centro de Diseño.
+const EJECUTIVO_USER_LIST = ["Roberto"];
 
 type RequestStatus = "Publicado" | "Denegado" | "Declinada" | "En Proceso" | "Planeando" | "Pendiente";
 type RequestPriority = "Bajo" | "Medio" | "Alto" | "Urgente";
@@ -322,8 +333,8 @@ type NotificationItem = {
 export default function GanaPlayMainApp() {
   // Sesión: localStorage = "recordar" (persiste al cerrar); sessionStorage =
   // solo esta pestaña. Se restaura de cualquiera de las dos.
-  const [role, setRole] = useState<"admin" | "cm" | "designer" | "operator" | "administrative" | "comercial" | null>(() => {
-    try { return ((localStorage.getItem('gp_role') || sessionStorage.getItem('gp_role')) as "admin" | "cm" | "designer" | "operator" | "administrative" | "comercial" | null) || null; } catch { return null; }
+  const [role, setRole] = useState<UserRole | null>(() => {
+    try { return ((localStorage.getItem('gp_role') || sessionStorage.getItem('gp_role')) as UserRole | null) || null; } catch { return null; }
   });
   const [userName, setUserName] = useState<string>(() => {
     try { return localStorage.getItem('gp_userName') || sessionStorage.getItem('gp_userName') || ''; } catch { return ''; }
@@ -339,22 +350,51 @@ export default function GanaPlayMainApp() {
   const [requests, setRequests] = useState<RequestType[]>([]);
   // `requests` es SIEMPRE la lista completa: de ahí sale el número de la
   // siguiente solicitud, y filtrarla provocaría IDs repetidos.
-  // `visibles` es lo que ve cada perfil. El Operador (Quota, Juan) no ve las
-  // solicitudes levantadas por el Trafficker.
+  // `visibles` es lo que ve cada perfil. El Operador (Juan) y el Ejecutivo
+  // Comercial (Roberto) no ven las solicitudes levantadas por el Trafficker.
   const esComercial = role === 'comercial';
+  const esEjecutivo = role === 'ejecutivo';
+  const sinLoDelTrafficker = role === 'operator' || role === 'ejecutivo';
   const visibles = useMemo(
-    () => (role === 'operator' ? requests.filter(r => !esSolicitudDelTrafficker(r)) : requests),
-    [requests, role],
+    () => (sinLoDelTrafficker ? requests.filter(r => !esSolicitudDelTrafficker(r)) : requests),
+    [requests, sinLoDelTrafficker],
   );
+
+  /**
+   * Perfiles que trabajan el tablero de solicitudes (no Diseño, no Comercial).
+   * Se agrupan en una sola condición porque aparecen en media docena de sitios
+   * y añadir un perfil nuevo obligaba a acordarse de todos ellos.
+   */
+  const gestionaSolicitudes =
+    role === 'admin' || role === 'cm' || role === 'operator' ||
+    role === 'administrative' || role === 'ejecutivo';
+
+  /** Carpeta CMR: la suben los diseñadores, la consultan Comercial y Ejecutivo. */
+  const verCMR = esComercial || esEjecutivo || role === 'admin' || role === 'designer';
+  /** Calendario de Redes Sociales: no es asunto de Operador ni de Comercial. */
+  const verCalendarioRedes = !esComercial && !esEjecutivo && role !== 'operator';
   const [loadingData, setLoadingData] = useState(true);
   // El tablero se está sirviendo desde nuestro servidor porque la conexión en
   // vivo con la base de datos no responde en esta red.
   const [modoRespaldo, setModoRespaldo] = useState(false);
 
   // ── Login ──
-  // Acceso principal: correo corporativo. "Acceso por rol" queda como respaldo.
+  // Acceso principal: correo corporativo + contraseña. El acceso por rol (el de
+  // antes) sigue ahí, escondido tras un enlace discreto: cambiar de golpe la
+  // única puerta de entrada de todo el equipo deja gente fuera.
   const [rememberMe, setRememberMe] = useState(() => { try { return localStorage.getItem('gp_remember') !== '0'; } catch { return true; } });
-  const [loginRole, setLoginRole] = useState<"admin" | "cm" | "designer" | "operator" | "administrative" | "comercial" | null>(null);
+  const [loginModo, setLoginModo] = useState<'correo' | 'rol'>('correo');
+  // El correo recordado se rellena DESPUÉS de montar, no en el estado inicial:
+  // el servidor no tiene localStorage y pintaría un formulario distinto al del
+  // navegador (React avisa del desajuste y descarta lo ya pintado).
+  const [loginEmail, setLoginEmail] = useState('');
+  useEffect(() => {
+    try {
+      const guardado = localStorage.getItem('gp_email');
+      if (guardado) setLoginEmail(guardado);
+    } catch { /* sin almacenamiento: se escribe a mano */ }
+  }, []);
+  const [loginRole, setLoginRole] = useState<UserRole | null>(null);
   // Panel "Mi perfil": cambio de contraseña personal.
   const [perfilOpen, setPerfilOpen] = useState(false);
   const [passActual, setPassActual] = useState("");
@@ -362,9 +402,17 @@ export default function GanaPlayMainApp() {
   const [passRepetir, setPassRepetir] = useState("");
   const [passGuardando, setPassGuardando] = useState(false);
   const [perfilMsg, setPerfilMsg] = useState<{ tipo: 'ok' | 'error'; texto: string } | null>(null);
+  // Conexión del agente de IA (MCP): el token se pide aparte, confirmando la
+  // contraseña, porque es una llave de larga duración.
+  const [mcpAbierto, setMcpAbierto] = useState(false);
+  const [mcpPass, setMcpPass] = useState("");
+  const [mcpCargando, setMcpCargando] = useState(false);
+  const [mcpError, setMcpError] = useState("");
+  const [mcpPanel, setMcpPanel] = useState<{ token: string; url: string } | null>(null);
   const [loginDesignerName, setLoginDesignerName] = useState("");
   const [loginOperatorName, setLoginOperatorName] = useState("");
   const [loginAdministrativeName, setLoginAdministrativeName] = useState("");
+  const [loginEjecutivoName, setLoginEjecutivoName] = useState("");
 
   // ── Lightbox para imágenes (referencia, comentarios, entregables) ──
   // Soluciona el bug de window.open(dataURL) que el navegador bloquea
@@ -625,7 +673,7 @@ export default function GanaPlayMainApp() {
 
   useEffect(() => {
     if (!role) return;
-    const targetRoleForNotifs = (role === 'admin' || role === 'cm' || role === 'operator' || role === 'administrative') ? 'admin' : 'designer';
+    const targetRoleForNotifs = gestionaSolicitudes ? 'admin' : 'designer';
     // Notificaciones: solo las 100 más recientes. Las viejas siguen en Firestore
     // (auditoría) pero no se cargan en el panel de la campanita.
     const qNotif = query(collection(db, "notifications"), orderBy("createdAt", "desc"), limit(100));
@@ -634,7 +682,7 @@ export default function GanaPlayMainApp() {
       setFirestoreNotifs(all.filter(n => n.targetRole === targetRoleForNotifs));
     });
     return () => unsub();
-  }, [role]);
+  }, [role, gestionaSolicitudes]);
 
   // ─── Chat de la solicitud abierta (tiempo real) ───
   // IMPORTANTE: depende solo de `selectedReqId` (no del objeto `selectedReq`
@@ -1829,7 +1877,7 @@ export default function GanaPlayMainApp() {
   };
 
   // ═══════════════ DECLINAR SOLICITUD (equipo interno autorizado) ═══════════════
-  const canDecline = role === "admin" || role === "cm" || role === "operator" || role === "administrative" || role === "designer";
+  const canDecline = gestionaSolicitudes || role === "designer";
 
   const handleConfirmDecline = async () => {
     if (!declineModalOpen) return;
@@ -1993,18 +2041,34 @@ export default function GanaPlayMainApp() {
     if (loginRole === 'designer') return loginDesignerName;
     if (loginRole === 'operator') return loginOperatorName;
     if (loginRole === 'administrative') return loginAdministrativeName;
+    if (loginRole === 'ejecutivo') return loginEjecutivoName;
     if (loginRole === 'admin') return 'Trafficker';
     if (loginRole === 'cm') return 'Community Manager';
+    if (loginRole === 'comercial') return 'Comercial';
     return '';
-  }, [loginRole, loginDesignerName, loginOperatorName, loginAdministrativeName]);
+  }, [loginRole, loginDesignerName, loginOperatorName, loginAdministrativeName, loginEjecutivoName]);
 
-  // ─── Login por rol. La contraseña se valida SIEMPRE en el servidor ───
+  /**
+   * Correo con el que se intentará la contraseña PERSONAL: el que se escribió
+   * (acceso por correo) o el que corresponde al nombre elegido (acceso por rol).
+   */
+  const correoDeEntrada = useMemo(
+    () => (loginModo === 'correo' ? loginEmail.trim().toLowerCase() : emailForUser(nombreElegido)),
+    [loginModo, loginEmail, nombreElegido],
+  );
+
+  // ─── Acceso. La contraseña se valida SIEMPRE en el servidor ───
   const handleLogin = useCallback(async () => {
     setLoginError("");
-    if (!loginRole) return;
-    if (loginRole === "designer" && !loginDesignerName) { setLoginError("Selecciona tu nombre."); return; }
-    if (loginRole === "operator" && !loginOperatorName) { setLoginError("Selecciona tu nombre."); return; }
-    if (loginRole === "administrative" && !loginAdministrativeName) { setLoginError("Selecciona tu nombre."); return; }
+    if (loginModo === 'correo') {
+      if (!loginEmail.trim()) { setLoginError("Escribe tu correo corporativo."); return; }
+    } else {
+      if (!loginRole) return;
+      if (loginRole === "designer" && !loginDesignerName) { setLoginError("Selecciona tu nombre."); return; }
+      if (loginRole === "operator" && !loginOperatorName) { setLoginError("Selecciona tu nombre."); return; }
+      if (loginRole === "administrative" && !loginAdministrativeName) { setLoginError("Selecciona tu nombre."); return; }
+      if (loginRole === "ejecutivo" && !loginEjecutivoName) { setLoginError("Selecciona tu nombre."); return; }
+    }
     if (!loginPass) { setLoginError("Ingresa la contraseña."); return; }
 
     setLoginLoading(true);
@@ -2018,22 +2082,31 @@ export default function GanaPlayMainApp() {
       };
 
       // ORDEN IMPORTANTE:
-      //  1º la contraseña COMPARTIDA del rol, que es la que usa hoy casi todo
-      //     el equipo. Se valida en nuestro servidor.
+      //  1º la contraseña COMPARTIDA, que es la que usa hoy casi todo el
+      //     equipo. Se valida en nuestro servidor.
       //  2º solo si esa falla, la contraseña PERSONAL contra Firebase.
       // Al revés, cada intento normal generaba un fallo en Firebase y sus
       // bloqueos por "demasiados intentos" dejaban a la gente fuera de la app.
-      let { res, data } = await pedirSesion({
-        role: loginRole, password: loginPass,
-        designerName: loginDesignerName, operatorName: loginOperatorName, administrativeName: loginAdministrativeName,
-      });
+      let { res, data } = loginModo === 'correo'
+        ? await pedirSesion({ email: loginEmail.trim(), password: loginPass })
+        : await pedirSesion({
+            role: loginRole as string, password: loginPass,
+            designerName: loginDesignerName, operatorName: loginOperatorName,
+            administrativeName: loginAdministrativeName, ejecutivoName: loginEjecutivoName,
+          });
 
       if (!res.ok || !data.ok) {
-        const correo = emailForUser(nombreElegido);
+        const correo = correoDeEntrada;
         if (correo) {
           const personal = await entrarConPersonal(correo, loginPass);
           if (personal.ok && personal.idToken) {
-            ({ res, data } = await pedirSesion({ idToken: personal.idToken, role: loginRole }));
+            // En el acceso por rol se manda también el rol elegido: así una
+            // contraseña personal solo abre SU perfil y no otro.
+            ({ res, data } = await pedirSesion(
+              loginModo === 'correo'
+                ? { idToken: personal.idToken }
+                : { idToken: personal.idToken, role: loginRole as string },
+            ));
           } else if (!personal.ok && personal.error !== 'sin-cuenta'
                      && personal.code !== 'auth/too-many-requests') {
             setLoginError("❌ " + personal.error);
@@ -2062,17 +2135,22 @@ export default function GanaPlayMainApp() {
       //  - Sin recordar → solo sessionStorage (se cierra al cerrar la pestaña).
       // NUNCA guardamos la contraseña en texto plano; mantener la sesión cumple
       // el objetivo de no volver a escribir credenciales de forma más segura.
+      // El correo con el que quedó identificada la sesión lo confirma el
+      // servidor: lo necesitan "Mi perfil" (cambio de contraseña) y el token
+      // del agente de IA.
+      const correoSesion = String(data.email || correoDeEntrada || "");
       try {
         sessionStorage.setItem("gp_role", data.role);
         sessionStorage.setItem("gp_userName", data.userName);
-        // El correo se guarda siempre en la sesión: lo necesita "Mi perfil"
-        // para saber de quién es la contraseña que se va a cambiar.
+        if (correoSesion) sessionStorage.setItem("gp_email", correoSesion);
         localStorage.removeItem("gp_role");
         localStorage.removeItem("gp_userName");
         if (rememberMe) {
           localStorage.setItem("gp_role", data.role);
           localStorage.setItem("gp_userName", data.userName);
           localStorage.setItem("gp_remember", "1");
+          // Solo el correo se recuerda para autocompletarlo; la contraseña no.
+          if (correoSesion) localStorage.setItem("gp_email", correoSesion);
         } else {
           localStorage.setItem("gp_remember", "0");
           localStorage.removeItem("gp_email");
@@ -2084,7 +2162,11 @@ export default function GanaPlayMainApp() {
     } finally {
       setLoginLoading(false);
     }
-  }, [nombreElegido, loginRole, loginPass, loginDesignerName, loginOperatorName, loginAdministrativeName, rememberMe]);
+  }, [
+    loginModo, loginEmail, correoDeEntrada, loginRole, loginPass,
+    loginDesignerName, loginOperatorName, loginAdministrativeName, loginEjecutivoName,
+    rememberMe,
+  ]);
 
   /**
    * Cierra la ventana emergente que esté abierta, de la más interna a la más
@@ -2244,16 +2326,60 @@ export default function GanaPlayMainApp() {
     }
   }, [miCorreo, passActual, passNueva, passRepetir, validarCompartida, addToast]);
 
+  /**
+   * Pide el token con el que se conecta el agente de IA.
+   *
+   * Se confirma la contraseña aunque la sesión ya esté abierta: el token no
+   * caduca, así que no debe quedar a la vista de quien pase por delante de una
+   * pantalla desatendida.
+   */
+  const pedirTokenAgente = useCallback(async () => {
+    setMcpError("");
+    if (!mcpPass) { setMcpError("Escribe tu contraseña para ver el token."); return; }
+    setMcpCargando(true);
+    try {
+      // Igual que en el acceso: primero la compartida, y si no, la personal.
+      let res = await fetch("/api/mcp/token", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: miCorreo, password: mcpPass }),
+      });
+      let data = await res.json();
+      if (!res.ok || !data.ok) {
+        const personal = await entrarConPersonal(miCorreo, mcpPass);
+        if (personal.ok && personal.idToken) {
+          res = await fetch("/api/mcp/token", {
+            method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ idToken: personal.idToken }),
+          });
+          data = await res.json();
+        }
+      }
+      if (!res.ok || !data.ok) {
+        setMcpError(data.error || "No se pudo generar el token.");
+        return;
+      }
+      setMcpPanel({ token: data.token, url: data.url });
+      setMcpPass("");
+    } catch {
+      setMcpError("Error de red. Intenta de nuevo.");
+    } finally {
+      setMcpCargando(false);
+    }
+  }, [miCorreo, mcpPass]);
+
   const handleLogout = () => {
     setRole(null); setUserName(""); setLoginPass("");
     setLoginDesignerName(""); setLoginOperatorName(""); setLoginAdministrativeName("");
-    setLoginError(""); setLoginRole(null); setActiveTab('Tablero Kanban');
+    setLoginEjecutivoName(""); setLoginError(""); setLoginRole(null);
+    setLoginModo('correo'); setActiveTab('Tablero Kanban');
     setNotifPanelOpen(false);
+    setMcpAbierto(false); setMcpPanel(null); setMcpPass(""); setMcpError("");
     try {
       // Cierra la sesión en ambos almacenes; conserva el correo recordado para
       // autocompletarlo la próxima vez (no la contraseña).
       sessionStorage.removeItem('gp_role');
       sessionStorage.removeItem('gp_userName');
+      sessionStorage.removeItem('gp_email');
       localStorage.removeItem('gp_role');
       localStorage.removeItem('gp_userName');
     } catch {}
@@ -2283,16 +2409,17 @@ export default function GanaPlayMainApp() {
   }, [visibles]);
 
   const allNotifications = useMemo<NotificationItem[]>(() => {
-    const targetRoleForNotifs = (role === 'admin' || role === 'cm' || role === 'operator' || role === 'administrative') ? 'admin' : 'designer';
+    const targetRoleForNotifs = gestionaSolicitudes ? 'admin' : 'designer';
     const myAlerts = deadlineAlerts.filter(a => a.targetRole === targetRoleForNotifs);
     // Las notificaciones traen el título de la solicitud en el mensaje: si no
-    // se filtran, el Operador leería por aquí justo lo que no debe ver.
+    // se filtran, el Operador y el Ejecutivo Comercial leerían por aquí justo
+    // lo que no deben ver.
     const idsVisibles = new Set(visibles.map(r => r.id));
-    const notifsPermitidas = role === 'operator'
+    const notifsPermitidas = sinLoDelTrafficker
       ? firestoreNotifs.filter(n => !n.requestId || idsVisibles.has(n.requestId))
       : firestoreNotifs;
     return [...myAlerts, ...notifsPermitidas];
-  }, [deadlineAlerts, firestoreNotifs, role, visibles]);
+  }, [deadlineAlerts, firestoreNotifs, gestionaSolicitudes, sinLoDelTrafficker, visibles]);
 
   const unreadCount = useMemo(() => allNotifications.filter(n => !n.read).length, [allNotifications]);
 
@@ -2305,7 +2432,12 @@ export default function GanaPlayMainApp() {
   // de perfil en el mismo navegador), se le lleva a la suya.
   useEffect(() => {
     if (esComercial && !['Promocionales', 'CMR'].includes(activeTab)) setActiveTab('Promocionales');
-  }, [esComercial, activeTab]);
+    // El Ejecutivo Comercial no tiene Redes Sociales, Influencers ni Centro de
+    // Diseño: si traía una guardada, se quedaría mirando una pantalla vacía.
+    else if (esEjecutivo && ['Redes Sociales', 'Contenido Influencers', 'Equipo Diseño'].includes(activeTab)) {
+      setActiveTab('Tablero Kanban');
+    }
+  }, [esComercial, esEjecutivo, activeTab]);
 
   const navItemStyle = (isActive: boolean): React.CSSProperties => ({
     display: 'flex', alignItems: 'center', gap: '8px', padding: '9px 15px', borderRadius: '10px', cursor: 'pointer',
@@ -2321,13 +2453,19 @@ export default function GanaPlayMainApp() {
       { key: 'cm',             icon: '🌐', label: 'Community Manager',  sub: 'Redes y contenido' },
       { key: 'operator',       icon: '👤', label: 'Operador',           sub: 'Juan' },
       { key: 'comercial',      icon: '🏷️', label: 'Comercial',          sub: 'Promocionales y CMR' },
-      { key: 'administrative', icon: '💼', label: 'DIRECTIVOS',         sub: 'Andres · Sebastian · Roberto' },
+      { key: 'ejecutivo',      icon: '🤝', label: 'Ejecutivo Comercial', sub: EJECUTIVO_USER_LIST.join(' · ') },
+      { key: 'administrative', icon: '💼', label: 'DIRECTIVOS',         sub: ADMINISTRATIVE_USER_LIST.join(' · ') },
       // Diseño sigue en el menú: quitarlo obligaba a todo el equipo a cambiar
       // su forma de entrar. Lo que separa el acceso NO es esconder la tarjeta,
       // es que este rol pide AUTH_PASS_DESIGNER, distinta de la general.
       { key: 'designer',       icon: '✦',  label: 'Diseñador',          sub: 'Equipo creativo' },
     ];
     const selectedCard = ROLE_CARDS.find(c => c.key === loginRole);
+    const limpiarFormulario = () => {
+      setLoginPass(''); setLoginError('');
+      setLoginDesignerName(''); setLoginOperatorName('');
+      setLoginAdministrativeName(''); setLoginEjecutivoName('');
+    };
     return (
       <div style={{ position: 'relative', display: 'flex', justifyContent: 'center', alignItems: 'center', minHeight: '100vh', overflow: 'hidden', background: 'var(--bg-color)' }}>
         <div style={{ position: 'absolute', top: '-12%', left: '-8%', width: '480px', height: '480px', borderRadius: '50%', background: 'radial-gradient(circle, rgba(0,120,62,0.10) 0%, transparent 70%)', pointerEvents: 'none' }} />
@@ -2342,8 +2480,87 @@ export default function GanaPlayMainApp() {
             <p style={{ color: 'var(--text-secondary)', fontSize: '14px', margin: 0 }}>Plataforma de solicitudes creativas</p>
           </div>
 
-          {/* ── Acceso por rol: único método de entrada ── */}
-          <>
+          {/* ── ACCESO PRINCIPAL: correo corporativo + contraseña ── */}
+          {loginModo === 'correo' && (
+            <>
+              <div className="card" style={{ padding: '26px' }}>
+                <div style={{ marginBottom: '18px' }}>
+                  <div style={{ fontSize: '15px', fontWeight: 700, color: 'var(--accent-dark)', lineHeight: 1.2 }}>Entra con tu correo</div>
+                  <div style={{ fontSize: '11.5px', color: 'var(--text-muted)', marginTop: '3px' }}>
+                    Tu perfil y tus permisos salen de tu correo corporativo.
+                  </div>
+                </div>
+
+                <div style={{ marginBottom: '14px' }}>
+                  <label className="label">Correo corporativo</label>
+                  <input type="email" placeholder="nombre.apellido@ganaplay.com" autoComplete="username"
+                    value={loginEmail}
+                    onChange={e => { setLoginEmail(e.target.value); setLoginError(''); }}
+                    onKeyDown={e => { if (e.key === 'Enter' && !loginLoading) handleLogin(); }}
+                  />
+                </div>
+
+                <div style={{ marginBottom: '16px' }}>
+                  <label className="label">Contraseña</label>
+                  <input type="password" placeholder="••••••••••••" autoComplete="current-password"
+                    value={loginPass} onChange={e => setLoginPass(e.target.value)}
+                    onKeyDown={e => { if (e.key === 'Enter' && !loginLoading) handleLogin(); }}
+                  />
+                </div>
+
+                {loginError && (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '10px 14px', background: 'var(--danger-soft)', border: '1px solid #f5c6c2', borderRadius: '10px', marginBottom: '14px' }}>
+                    <span style={{ color: 'var(--danger)', fontSize: '12px', fontWeight: 600 }}>{loginError}</span>
+                  </div>
+                )}
+
+                <button className="btn" disabled={loginLoading} onClick={handleLogin}
+                  style={{ width: '100%', padding: '14px', fontSize: '14px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+                  {loginLoading ? 'Verificando…' : 'Acceder al sistema →'}
+                </button>
+
+                {loginEmail.includes('@') && (
+                  <div style={{ textAlign: 'center', marginTop: '14px' }}>
+                    <button
+                      onClick={async () => {
+                        setLoginError("");
+                        setLoginLoading(true);
+                        const r = await recuperarPassword(loginEmail.trim());
+                        setLoginLoading(false);
+                        setLoginError(r.ok
+                          ? `✉️ Si tienes contraseña personal, te llegó un correo a ${loginEmail.trim()} para restablecerla.`
+                          : "❌ " + r.error);
+                      }}
+                      style={{ background: 'none', border: 'none', color: 'var(--text-muted)', fontSize: '12px', cursor: 'pointer', textDecoration: 'underline', width: 'auto', padding: 0 }}>
+                      Olvidé mi contraseña
+                    </button>
+                  </div>
+                )}
+              </div>
+
+              <label style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px', fontSize: '12.5px', color: 'var(--text-secondary)', marginTop: '16px', cursor: 'pointer', width: 'auto' }}>
+                <input type="checkbox" checked={rememberMe} onChange={e => setRememberMe(e.target.checked)} style={{ width: 'auto' }} />
+                Recordar mis datos y mantener la sesión iniciada
+              </label>
+
+              {/* Puerta de atrás deliberadamente discreta: el acceso por rol
+                  sigue funcionando para quien todavía no usa su correo. */}
+              <div style={{ textAlign: 'center', marginTop: '18px' }}>
+                <button onClick={() => { setLoginModo('rol'); limpiarFormulario(); }}
+                  style={{ background: 'none', border: 'none', color: 'var(--text-muted)', fontSize: '11px', cursor: 'pointer', width: 'auto', padding: 0, opacity: 0.75 }}>
+                  Acceso por rol
+                </button>
+              </div>
+
+              <p style={{ textAlign: 'center', fontSize: '10px', color: 'var(--text-muted)', marginTop: '12px', marginBottom: 0 }}>
+                🔒 Acceso seguro · GanaPlay {new Date().getFullYear()}
+              </p>
+            </>
+          )}
+
+          {/* ── ACCESO DE RESPALDO: elegir rol (el método anterior) ── */}
+          {loginModo === 'rol' && (
+            <>
               <div style={{ marginBottom: '20px' }}>
                 <p style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '1.5px', textAlign: 'center', marginBottom: '12px' }}>Selecciona tu rol</p>
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '10px' }}>
@@ -2351,7 +2568,7 @@ export default function GanaPlayMainApp() {
                     const active = loginRole === card.key;
                     return (
                       <div key={card.key}
-                        onClick={() => { setLoginRole(card.key as "admin" | "cm" | "designer" | "operator" | "administrative" | "comercial"); setLoginPass(''); setLoginDesignerName(''); setLoginOperatorName(''); setLoginAdministrativeName(''); setLoginError(''); }}
+                        onClick={() => { setLoginRole(card.key as UserRole); limpiarFormulario(); }}
                         style={{
                           background: active ? 'var(--accent-soft)' : 'var(--panel-bg)',
                           border: `1.5px solid ${active ? 'var(--accent-color)' : 'var(--border-color)'}`,
@@ -2409,6 +2626,16 @@ export default function GanaPlayMainApp() {
                     </div>
                   )}
 
+                  {loginRole === 'ejecutivo' && (
+                    <div style={{ marginBottom: '14px' }}>
+                      <label className="label">Tu nombre</label>
+                      <select value={loginEjecutivoName} onChange={e => setLoginEjecutivoName(e.target.value)}>
+                        <option value="">— Selecciona tu nombre —</option>
+                        {EJECUTIVO_USER_LIST.map(u => <option key={u} value={u}>{u}</option>)}
+                      </select>
+                    </div>
+                  )}
+
                   <div style={{ marginBottom: '16px' }}>
                     <label className="label">Contraseña</label>
                     <input type="password" placeholder="••••••••••••"
@@ -2455,10 +2682,18 @@ export default function GanaPlayMainApp() {
                 Recordar mis datos y mantener la sesión iniciada
               </label>
 
-              <p style={{ textAlign: 'center', fontSize: '10px', color: 'var(--text-muted)', marginTop: '14px', marginBottom: 0 }}>
+              <div style={{ textAlign: 'center', marginTop: '18px' }}>
+                <button onClick={() => { setLoginModo('correo'); setLoginRole(null); limpiarFormulario(); }}
+                  style={{ background: 'none', border: 'none', color: 'var(--text-muted)', fontSize: '11px', cursor: 'pointer', width: 'auto', padding: 0, opacity: 0.75 }}>
+                  ← Entrar con mi correo corporativo
+                </button>
+              </div>
+
+              <p style={{ textAlign: 'center', fontSize: '10px', color: 'var(--text-muted)', marginTop: '12px', marginBottom: 0 }}>
                 🔒 Acceso seguro · GanaPlay {new Date().getFullYear()}
               </p>
             </>
+          )}
         </div>
       </div>
     );
@@ -2489,6 +2724,8 @@ export default function GanaPlayMainApp() {
                 ? `👤 ${userName}`
                 : role === 'administrative'
                 ? `💼 ${userName}`
+                : role === 'ejecutivo'
+                ? `🤝 ${userName}`
                 : `✦ ${userName}`}
             </div>
           </div>
@@ -2539,7 +2776,7 @@ export default function GanaPlayMainApp() {
           {!esComercial && <>
           <div style={navItemStyle(activeTab === 'Tablero Kanban')} onClick={() => setActiveTab('Tablero Kanban')}><Calendar size={15} /> Planeación</div>
           <div style={navItemStyle(activeTab === 'Calendario Entrega')} onClick={() => setActiveTab('Calendario Entrega')}><Layout size={15} /> Por estado</div>
-          {(role === 'admin' || role === 'cm' || role === 'operator' || role === 'administrative') && (
+          {gestionaSolicitudes && (
             <div style={{ ...navItemStyle(activeTab === 'Pendientes'), position: 'relative' }} onClick={() => setActiveTab('Pendientes')}>
               <AlertCircle size={15} /> Pendientes
               {visibles.filter(r => r.status === 'Pendiente').length > 0 && (
@@ -2555,13 +2792,13 @@ export default function GanaPlayMainApp() {
           <div style={navItemStyle(activeTab === 'Historial')} onClick={() => setActiveTab('Historial')}><Clock size={15} /> Historial</div>
           <div style={navItemStyle(activeTab === 'Tabla Principal')} onClick={() => setActiveTab('Tabla Principal')}><List size={15} /> Tabla</div>
           </>}
-          {role !== 'operator' && !esComercial && (
+          {!verCalendarioRedes ? null : (
             <div style={navItemStyle(activeTab === 'Redes Sociales')} onClick={() => setActiveTab('Redes Sociales')}><CalendarDays size={15} /> Redes Sociales</div>
           )}
           <div style={navItemStyle(activeTab === 'Promocionales')} onClick={() => setActiveTab('Promocionales')}><Megaphone size={15} /> Promocionales</div>
-          {/* CMR es COMPARTIDO: lo suben los diseñadores y lo consulta
-              Comercial, sobre la misma carpeta. */}
-          {(esComercial || role === 'admin' || role === 'designer') && (
+          {/* CMR es COMPARTIDO: lo suben los diseñadores y lo consultan
+              Comercial y el Ejecutivo Comercial, sobre la misma carpeta. */}
+          {verCMR && (
             <div style={navItemStyle(activeTab === 'CMR')} onClick={() => setActiveTab('CMR')}><FolderKanban size={15} /> CMR</div>
           )}
           {(role === 'admin' || role === 'cm') && (
@@ -2613,7 +2850,7 @@ export default function GanaPlayMainApp() {
                     <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: colColor }} />
                     <span style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)' }}>{col.title} <span style={{ color: colColor, marginLeft: '4px' }}>{colCards.length}</span></span>
                   </div>
-                  {(role === 'admin' || role === 'cm' || role === 'operator' || role === 'administrative') && col.id === 'Pendiente' && (
+                  {gestionaSolicitudes && col.id === 'Pendiente' && (
                     <div style={{ cursor: 'pointer', padding: '11px 14px', borderRadius: '10px', border: '1px dashed var(--accent-color)', display: 'flex', alignItems: 'center', gap: '8px', color: 'var(--accent-color)', fontSize: '13px', fontWeight: 600, background: 'var(--accent-soft)' }}
                       onClick={openCreateRequest}>
                       <Plus size={16} /> Nueva solicitud
@@ -2726,7 +2963,7 @@ export default function GanaPlayMainApp() {
                             {(c.priority === 'Alto' || c.priority === 'Urgente') && <div style={{ fontSize: '8px', color: 'var(--danger)', fontWeight: 700, marginTop: '2px' }}>⚡ {c.priority.toUpperCase()}</div>}
                           </div>
                         ))}
-                        {(role === 'admin' || role === 'cm' || role === 'operator' || role === 'administrative') && cards.length === 0 && (
+                        {gestionaSolicitudes && cards.length === 0 && (
                           <div title="Agregar solicitud en este día" style={{ opacity: 0.4, cursor: 'pointer', textAlign: 'center', fontSize: '16px', color: 'var(--accent-color)' }}
                             onClick={() => { openCreateRequest(); setDeliveryDate(day.dateStr); }}>+</div>
                         )}
@@ -3041,7 +3278,7 @@ export default function GanaPlayMainApp() {
                               {creative.aiEvaluation && (
                                 <span className={`badge badge-${creative.aiEvaluation.color}`} style={{ fontSize: '10px' }}>{creative.aiEvaluation.rating}/10</span>
                               )}
-                              {(role === 'admin' || role === 'cm' || role === 'operator' || role === 'administrative') && (
+                              {gestionaSolicitudes && (
                                 <button className="btn-secondary" style={{ padding: '5px 10px', fontSize: '11px', width: '100%', borderRadius: '8px', cursor: 'pointer' }}
                                   onClick={() => handleDownload(creative, req.id, creative.type)}>
                                   <Download size={12} /> Descargar
@@ -3152,7 +3389,7 @@ export default function GanaPlayMainApp() {
                           </div>
                         );
                       })}
-                      {(role === 'admin' || role === 'cm' || role === 'operator' || role === 'administrative') && (
+                      {gestionaSolicitudes && (
                         <div style={{ display: 'grid', gridTemplateColumns: gridCols, minWidth: '930px', cursor: 'pointer' }} onClick={openCreateRequest}>
                           <div style={cell()} />
                           <div style={{ ...cell({ color: 'var(--accent-color)', gap: '6px', fontWeight: 600 }), gridColumn: 'span 8' }}>
@@ -3172,7 +3409,7 @@ export default function GanaPlayMainApp() {
         {/* La pestaña se oculta arriba, pero `activeTab` se recuerda entre
             sesiones: sin esta guarda, un Operador que la tuviera abierta la
             seguiría viendo al volver a entrar. */}
-        {activeTab === 'Redes Sociales' && role !== 'operator' && (
+        {activeTab === 'Redes Sociales' && verCalendarioRedes && (
           <SocialMediaTab role={role} userName={userName} addToast={addToast} />
         )}
 
@@ -3180,7 +3417,7 @@ export default function GanaPlayMainApp() {
           <InfluencerModule role={role} userName={userName} addToast={addToast} />
         )}
 
-        {activeTab === 'CMR' && (esComercial || role === 'admin' || role === 'designer') && (
+        {activeTab === 'CMR' && verCMR && (
           <PromoModule tablero="cmr" role={role} userName={userName} addToast={addToast} />
         )}
 
@@ -3667,7 +3904,7 @@ export default function GanaPlayMainApp() {
                     Estado: {selectedReq.status}
                   </span>
                 )}
-                {(role === 'admin' || role === 'cm' || role === 'operator' || role === 'administrative') ? (
+                {gestionaSolicitudes ? (
                   <select value={selectedReq.priority ?? 'Medio'} onChange={handleChangePriority}
                     style={{ width: 'auto', background: priorityConfig[selectedReq.priority ?? 'Medio'].bg, color: priorityConfig[selectedReq.priority ?? 'Medio'].text, fontWeight: 700, border: `1px solid ${priorityConfig[selectedReq.priority ?? 'Medio'].text}` }}>
                     {(["Bajo", "Medio", "Alto", "Urgente"] as RequestPriority[]).map(p => <option key={p} value={p}>{p}</option>)}
@@ -4190,7 +4427,13 @@ export default function GanaPlayMainApp() {
             <div style={{ background: 'var(--surface-1)', border: '1px solid var(--border-color)', borderRadius: '10px', padding: '12px 14px', marginBottom: '18px' }}>
               <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)' }}>{userName || 'Sin nombre'}</div>
               <div style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>
-                {role === 'admin' ? 'Trafficker' : role === 'cm' ? 'Community Manager' : role === 'operator' ? 'Operador' : role === 'administrative' ? 'Directivo' : 'Diseñador'}
+                {role === 'admin' ? 'Trafficker'
+                  : role === 'cm' ? 'Community Manager'
+                  : role === 'operator' ? 'Operador'
+                  : role === 'administrative' ? 'Directivo'
+                  : role === 'ejecutivo' ? 'Ejecutivo Comercial'
+                  : role === 'comercial' ? 'Comercial'
+                  : 'Diseñador'}
               </div>
               <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '4px', wordBreak: 'break-all' }}>{miCorreo || '— sin correo corporativo —'}</div>
             </div>
@@ -4239,6 +4482,92 @@ export default function GanaPlayMainApp() {
                   disabled={passGuardando} onClick={handleCambiarPassword}>
                   {passGuardando ? 'Guardando…' : 'Guardar contraseña'}
                 </button>
+
+                {/* ─── Conectar el agente de IA (MCP) ─── */}
+                <div style={{ borderTop: '1px solid var(--border-color)', marginTop: '22px', paddingTop: '18px' }}>
+                  <button onClick={() => { setMcpAbierto(a => !a); setMcpError(''); }}
+                    style={{ background: 'none', border: 'none', padding: 0, width: '100%', textAlign: 'left', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    <Bot size={15} color="var(--accent-color)" />
+                    <span style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.6px' }}>
+                      Conectar mi agente de IA
+                    </span>
+                    <ChevronRight size={14} style={{ marginLeft: 'auto', color: 'var(--text-muted)', transform: mcpAbierto ? 'rotate(90deg)' : 'none', transition: 'transform .18s ease' }} />
+                  </button>
+
+                  {mcpAbierto && (
+                    <div style={{ marginTop: '14px' }}>
+                      <p style={{ fontSize: '12px', color: 'var(--text-muted)', margin: '0 0 14px', lineHeight: 1.55 }}>
+                        Tu agente podrá <strong>levantar solicitudes y consultar el tablero</strong> a tu
+                        nombre, con tus mismos permisos. El token no caduca: confirma tu contraseña
+                        para verlo y no lo compartas.
+                      </p>
+
+                      {!mcpPanel ? (
+                        <>
+                          <div className="form-group" style={{ marginBottom: '12px' }}>
+                            <label className="label">Tu contraseña</label>
+                            <input type="password" value={mcpPass} autoComplete="current-password"
+                              onChange={e => setMcpPass(e.target.value)}
+                              onKeyDown={e => { if (e.key === 'Enter' && !mcpCargando) pedirTokenAgente(); }} />
+                          </div>
+                          {mcpError && (
+                            <div style={{ fontSize: '12.5px', lineHeight: 1.5, padding: '10px 12px', borderRadius: '9px', marginBottom: '12px', background: '#fdecea', color: 'var(--danger)', border: '1px solid var(--danger)' }}>
+                              {mcpError}
+                            </div>
+                          )}
+                          <button className="btn-ghost" onClick={pedirTokenAgente} disabled={mcpCargando}
+                            style={{ width: '100%', padding: '10px', fontSize: '13px', borderRadius: '10px', cursor: mcpCargando ? 'wait' : 'pointer' }}>
+                            {mcpCargando ? 'Generando…' : 'Mostrar mis datos de conexión'}
+                          </button>
+                        </>
+                      ) : (
+                        <>
+                          <label className="label">Dirección del servidor</label>
+                          <div style={{ fontFamily: 'monospace', fontSize: '11.5px', background: 'var(--surface-1)', border: '1px solid var(--border-color)', borderRadius: '8px', padding: '9px 11px', marginBottom: '12px', wordBreak: 'break-all', color: 'var(--text-primary)' }}>
+                            {mcpPanel.url}
+                          </div>
+
+                          <label className="label">Tu token personal</label>
+                          <div style={{ fontFamily: 'monospace', fontSize: '11.5px', background: 'var(--surface-1)', border: '1px solid var(--border-color)', borderRadius: '8px', padding: '9px 11px', marginBottom: '12px', wordBreak: 'break-all', color: 'var(--text-primary)' }}>
+                            {mcpPanel.token}
+                          </div>
+
+                          <p style={{ fontSize: '11.5px', color: 'var(--text-muted)', margin: '0 0 8px', lineHeight: 1.5 }}>
+                            En Claude Code, pega este comando en la terminal:
+                          </p>
+                          <div style={{ fontFamily: 'monospace', fontSize: '11px', background: 'var(--surface-1)', border: '1px solid var(--border-color)', borderRadius: '8px', padding: '9px 11px', marginBottom: '12px', wordBreak: 'break-all', color: 'var(--text-primary)' }}>
+                            {`claude mcp add --transport http ganaplay ${mcpPanel.url} --header "Authorization: Bearer ${mcpPanel.token}"`}
+                          </div>
+
+                          <div style={{ display: 'flex', gap: '8px' }}>
+                            <button className="btn-ghost" style={{ flex: 1, padding: '9px', fontSize: '12px', borderRadius: '9px', cursor: 'pointer' }}
+                              onClick={() => {
+                                navigator.clipboard?.writeText(
+                                  `claude mcp add --transport http ganaplay ${mcpPanel.url} --header "Authorization: Bearer ${mcpPanel.token}"`
+                                ).then(() => addToast('Comando copiado.', 'success'))
+                                 .catch(() => addToast('No se pudo copiar. Selecciónalo a mano.', 'error'));
+                              }}>
+                              Copiar comando
+                            </button>
+                            <button className="btn-ghost" style={{ flex: 1, padding: '9px', fontSize: '12px', borderRadius: '9px', cursor: 'pointer' }}
+                              onClick={() => {
+                                navigator.clipboard?.writeText(mcpPanel.token)
+                                  .then(() => addToast('Token copiado.', 'success'))
+                                  .catch(() => addToast('No se pudo copiar. Selecciónalo a mano.', 'error'));
+                              }}>
+                              Copiar token
+                            </button>
+                          </div>
+
+                          <button onClick={() => { setMcpPanel(null); setMcpPass(''); }}
+                            style={{ background: 'none', border: 'none', color: 'var(--text-muted)', fontSize: '11.5px', cursor: 'pointer', textDecoration: 'underline', padding: '10px 0 0', width: 'auto' }}>
+                            Ocultar
+                          </button>
+                        </>
+                      )}
+                    </div>
+                  )}
+                </div>
               </>
             )}
           </div>

@@ -26,9 +26,10 @@ export const USER_DIRECTORY: Record<string, string> = {
   "Verónica": "veronica.marquez@ganaplay.com",
   "Caleb": "caleb.guevara@ganaplay.com",
   "Roberto": "roberto.andrade@ganaplay.com",
+  "Gabriela": "gabriela.martinez@ganaplay.com",
   "Juan": "juan.gutierrez@ganaplay.com",
-  // Operadores y Directivos restantes: completar cuando sepamos sus emails.
-  "Comercial": "",
+  "Comercial": "comercial@ganaplay.com",
+  // Directivos restantes: completar cuando sepamos sus emails.
   "Andres": "",
   "Sebastian": "",
 };
@@ -55,11 +56,18 @@ export const SUGGESTED_REQUESTER_EMAILS: string[] = Array.from(
 export const OPERATOR_USERS = ["Juan"] as const;
 
 /**
- * Lista de DIRECTIVOS válidos (Andres, Sebastian, Roberto) — espejo del backend.
+ * Lista de DIRECTIVOS válidos (Andres, Sebastian) — espejo del backend.
  * Internamente el rol se sigue llamando "administrative" por compatibilidad
  * con datos previos; el label visible en UI es "DIRECTIVOS".
+ *
+ * Roberto ya no está aquí: pasó a Ejecutivo Comercial, un perfil con menos
+ * alcance (no ve las solicitudes del Trafficker). Dejarlo también como
+ * DIRECTIVO habría sido una puerta trasera a lo que se le acaba de restringir.
  */
-export const ADMINISTRATIVE_USERS = ["Andres", "Sebastian", "Roberto"] as const;
+export const ADMINISTRATIVE_USERS = ["Andres", "Sebastian"] as const;
+
+/** Ejecutivos comerciales — espejo del backend. */
+export const EJECUTIVO_USERS = ["Roberto"] as const;
 
 /** Correo asociado a un nombre de usuario (cadena vacía si no está registrado). */
 export function emailForUser(name: string): string {
