@@ -20,7 +20,13 @@ import { createHmac, timingSafeEqual } from "crypto";
  *                      Promocionales y CMR. NO ve las solicitudes levantadas
  *                      por el Trafficker ni el Centro de Diseño.
  *  - operator        → Operadores (Juan). Como CM pero sin ver lo del Trafficker.
- *  - administrative  → DIRECTIVOS (Andres, Sebastian). Label en UI: "DIRECTIVOS".
+ *  - administrative  → DIRECTIVOS (Sebastián, dirección de operaciones, y
+ *                      Andres). Ven TODO el trabajo de la empresa: solicitudes
+ *                      (incluidas las del Trafficker), Redes Sociales,
+ *                      Promocionales, CMR e Influencers. Lo único que no
+ *                      alcanzan es la eliminación permanente, que sigue siendo
+ *                      del Trafficker, y el escritorio personal de cada
+ *                      diseñador. Label en UI: "DIRECTIVOS".
  *  - designer        → Diseñador. Centro de Diseño, entregables, IA Andromeda.
  */
 export type Role =
@@ -68,6 +74,9 @@ const BUILTIN_DIRECTORY: DirectoryEntry[] = [
   { email: "gabriela.martinez@ganaplay.com", role: "comercial",     name: "Gabriela" },
   { email: "comercial@ganaplay.com",        role: "comercial",      name: "Comercial" },
   { email: "juan.gutierrez@ganaplay.com",   role: "operator",       name: "Juan" },
+  // Dirección: ven todo el trabajo de la empresa, sin poder de borrado.
+  { email: "sebastian.calderon@ganaplay.com", role: "administrative", name: "Sebastian" },
+  { email: "andres.clavijo@ganaplay.com",     role: "administrative", name: "Andres" },
 ];
 
 function buildDirectory(): Map<string, DirectoryEntry> {

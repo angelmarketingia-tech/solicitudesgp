@@ -369,10 +369,20 @@ export default function GanaPlayMainApp() {
     role === 'admin' || role === 'cm' || role === 'operator' ||
     role === 'administrative' || role === 'ejecutivo';
 
-  /** Carpeta CMR: la suben los diseñadores, la consultan Comercial y Ejecutivo. */
-  const verCMR = esComercial || esEjecutivo || role === 'admin' || role === 'designer';
+  /**
+   * DIRECTIVOS (dirección de operaciones) ven TODO el trabajo de la empresa.
+   * Lo único fuera de su alcance es la eliminación permanente —que sigue
+   * siendo del Trafficker— y el escritorio personal de cada diseñador, que
+   * solo lista las piezas asignadas a quien lo abre.
+   */
+  const esDirectivo = role === 'administrative';
+
+  /** Carpeta CMR: la suben los diseñadores; la consultan Comercial y dirección. */
+  const verCMR = esComercial || esEjecutivo || esDirectivo || role === 'admin' || role === 'designer';
   /** Calendario de Redes Sociales: no es asunto de Operador ni de Comercial. */
   const verCalendarioRedes = !esComercial && !esEjecutivo && role !== 'operator';
+  /** Módulo de Influencers: lo llevan Trafficker y CM, y lo supervisa dirección. */
+  const verInfluencers = role === 'admin' || role === 'cm' || esDirectivo;
   const [loadingData, setLoadingData] = useState(true);
   // El tablero se está sirviendo desde nuestro servidor porque la conexión en
   // vivo con la base de datos no responde en esta red.
@@ -2801,7 +2811,7 @@ export default function GanaPlayMainApp() {
           {verCMR && (
             <div style={navItemStyle(activeTab === 'CMR')} onClick={() => setActiveTab('CMR')}><FolderKanban size={15} /> CMR</div>
           )}
-          {(role === 'admin' || role === 'cm') && (
+          {verInfluencers && (
             <div style={navItemStyle(activeTab === 'Contenido Influencers')} onClick={() => setActiveTab('Contenido Influencers')}><Users size={15} /> Contenido Influencers</div>
           )}
         </div>
@@ -3413,7 +3423,7 @@ export default function GanaPlayMainApp() {
           <SocialMediaTab role={role} userName={userName} addToast={addToast} />
         )}
 
-        {activeTab === 'Contenido Influencers' && (role === 'admin' || role === 'cm') && (
+        {activeTab === 'Contenido Influencers' && verInfluencers && (
           <InfluencerModule role={role} userName={userName} addToast={addToast} />
         )}
 

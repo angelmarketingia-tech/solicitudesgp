@@ -40,7 +40,7 @@ export const PERFILES: Record<Perfil, { tarjeta: string; nombre: string | null; 
   admin: { tarjeta: "Trafficker", nombre: null, correo: "angel.vaca@ganaplay.com" },
   cm: { tarjeta: "Community Manager", nombre: null, correo: "fernanda.monrroy@ganaplay.com" },
   operator: { tarjeta: "Operador", nombre: "Juan", correo: "juan.gutierrez@ganaplay.com" },
-  administrative: { tarjeta: "DIRECTIVOS", nombre: "Andres", correo: "" },
+  administrative: { tarjeta: "DIRECTIVOS", nombre: "Sebastian", correo: "sebastian.calderon@ganaplay.com" },
   designer: { tarjeta: "Diseñador", nombre: "Juan David", correo: "david.gutierrez@ganaplay.com" },
   comercial: { tarjeta: "Comercial", nombre: null, correo: "comercial@ganaplay.com" },
   ejecutivo: { tarjeta: "Ejecutivo Comercial", nombre: "Roberto", correo: "roberto.andrade@ganaplay.com" },

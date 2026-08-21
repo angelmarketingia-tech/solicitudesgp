@@ -29,9 +29,8 @@ export const USER_DIRECTORY: Record<string, string> = {
   "Gabriela": "gabriela.martinez@ganaplay.com",
   "Juan": "juan.gutierrez@ganaplay.com",
   "Comercial": "comercial@ganaplay.com",
-  // Directivos restantes: completar cuando sepamos sus emails.
-  "Andres": "",
-  "Sebastian": "",
+  "Sebastian": "sebastian.calderon@ganaplay.com",
+  "Andres": "andres.clavijo@ganaplay.com",
 };
 
 /**

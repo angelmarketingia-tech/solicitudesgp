@@ -24,8 +24,12 @@ const MATRIZ: Record<Perfil, { ve: string[]; noVe: string[] }> = {
     noVe: ["Redes Sociales", "Centro de Diseño", "Contenido Influencers"],
   },
   administrative: {
-    ve: ["Planeación", "Por estado", "Pendientes", "Historial", "Tabla", "Redes Sociales", "Promocionales"],
-    noVe: ["Centro de Diseño", "Contenido Influencers"],
+    // Dirección de operaciones: ve todo el trabajo de la empresa. Lo único
+    // fuera de su alcance es el escritorio personal de cada diseñador (y la
+    // eliminación permanente, que comprueba la prueba de más abajo).
+    ve: ["Planeación", "Por estado", "Pendientes", "Historial", "Tabla",
+         "Redes Sociales", "Promocionales", "CMR", "Contenido Influencers"],
+    noVe: ["Centro de Diseño"],
   },
   ejecutivo: {
     // Roberto: sus solicitudes, Promocionales y CMR. Nada de Redes Sociales,
