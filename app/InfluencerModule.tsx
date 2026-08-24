@@ -25,7 +25,7 @@ import {
   CalendarDays, ExternalLink, FileDown, FileText,
 } from "lucide-react";
 import { db } from "@/lib/firebase";
-import { publicLink } from "@/lib/public-url";
+import { publicLink, publicLinkAlterno } from "@/lib/public-url";
 import { descargarWord, imprimirPdf } from "@/lib/influencer-export";
 import { collection, onSnapshot, query, where } from "firebase/firestore";
 import {
@@ -177,6 +177,20 @@ export default function InfluencerModule({ role, addToast }: Props) {
     }
   };
 
+  /**
+   * El mismo calendario en dominio neutro, para quien no consigue abrir el
+   * enlace normal (ver `publicLinkAlterno`).
+   */
+  const copiarLinkAlterno = async (inf: Influencer) => {
+    const url = publicLinkAlterno(`/i/${inf.shareCode}`);
+    try {
+      await navigator.clipboard.writeText(url);
+      addToast(`Enlace alterno copiado: ${url}`, "success");
+    } catch {
+      addToast(url, "info");
+    }
+  };
+
   const openNewItem = (date: string) => {
     if (!canEdit || !selected) return;
     setEditingItemId(null);
@@ -307,6 +321,12 @@ export default function InfluencerModule({ role, addToast }: Props) {
                 <div style={{ fontSize: "12px", color: "var(--text-muted)", display: "flex", alignItems: "center", gap: "6px", marginTop: "2px" }}>
                   <Link2 size={12} /> Link público de solo lectura ·
                   <button onClick={() => copyLink(selected)} style={{ background: "none", border: "none", color: "var(--accent-color)", cursor: "pointer", padding: 0, fontSize: "12px", fontWeight: 600, textDecoration: "underline", width: "auto" }}>copiar</button>
+                  ·
+                  <button onClick={() => copiarLinkAlterno(selected)}
+                    title="Mismo calendario, en otro dominio. Úsalo si a alguien no le abre el enlace normal: su operador puede estar filtrando el dominio de la marca."
+                    style={{ background: "none", border: "none", color: "var(--text-muted)", cursor: "pointer", padding: 0, fontSize: "12px", fontWeight: 600, textDecoration: "underline", width: "auto" }}>
+                    copiar enlace alterno
+                  </button>
                 </div>
                 {/* Descarga del mes: para quien no consigue abrir el link. */}
                 <div style={{ display: "flex", alignItems: "center", gap: "7px", marginTop: "10px" }}>

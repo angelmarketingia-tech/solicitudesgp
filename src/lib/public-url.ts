@@ -43,3 +43,25 @@ export function publicBaseUrl(): string {
 export function publicLink(path: string): string {
   return `${publicBaseUrl()}${path.startsWith("/") ? path : `/${path}`}`;
 }
+
+/** Dirección de respaldo, en dominio neutro. */
+const BASE_ALTERNA = "https://solicitudesgp.vercel.app";
+
+/**
+ * El MISMO contenido servido desde `…vercel.app` en vez de `ganaplay.lat`.
+ *
+ * POR QUÉ: a varios influencers no les abre el enlace normal, y la página está
+ * comprobada: responde 200 y se ve entera desde fuera, sin sesión. Lo que
+ * queda del otro lado es su red. "ganaplay" en el dominio tiene toda la pinta
+ * de caer en los filtros de apuestas que aplican algunos operadores móviles,
+ * y `vercel.app` no le dice nada a esos filtros.
+ *
+ * Es una conjetura, pero sale gratis probarla: es la misma página.
+ */
+export function publicLinkAlterno(path: string): string {
+  const ruta = path.startsWith("/") ? path : `/${path}`;
+  // Si el dominio propio YA es el alterno, se ofrece el otro para que el botón
+  // nunca copie exactamente lo mismo que el de al lado.
+  if (publicBaseUrl() === BASE_ALTERNA) return `https://solicitudes.ganaplay.lat${ruta}`;
+  return `${BASE_ALTERNA}${ruta}`;
+}
