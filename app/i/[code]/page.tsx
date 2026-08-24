@@ -16,12 +16,13 @@
  */
 
 import React, { use, useEffect, useMemo, useState } from "react";
-import { ChevronLeft, ChevronRight, CalendarDays, X, Lock, WifiOff } from "lucide-react";
+import { ChevronLeft, ChevronRight, CalendarDays, X, Lock, WifiOff, FileDown, FileText } from "lucide-react";
 import {
   Influencer, ContentItem,
   STATUS_STYLE, PILLAR_STYLE, DOW_ES,
   monthGrid, monthLabel, influencerFromDoc, itemFromDoc,
 } from "@/lib/influencer";
+import { descargarWord, imprimirPdf } from "@/lib/influencer-export";
 
 export default function PublicInfluencerPage({ params }: { params: Promise<{ code: string }> }) {
   const { code } = use(params);
@@ -89,14 +90,33 @@ export default function PublicInfluencerPage({ params }: { params: Promise<{ cod
     }
     return map;
   }, [items]);
-  const monthCount = useMemo(() => {
+  const monthItems = useMemo(() => {
     const prefix = `${viewY}-${String(viewM + 1).padStart(2, "0")}`;
-    return items.filter(it => it.date.startsWith(prefix)).length;
+    return items.filter(it => it.date.startsWith(prefix));
   }, [items, viewY, viewM]);
+  const monthCount = monthItems.length;
 
   const prevMonth = () => { const m = viewM - 1; if (m < 0) { setViewM(11); setViewY(viewY - 1); } else setViewM(m); };
   const nextMonth = () => { const m = viewM + 1; if (m > 11) { setViewM(0); setViewY(viewY + 1); } else setViewM(m); };
   const todayStr = today.toISOString().split("T")[0];
+
+  // ── Descarga del mes ──
+  // El influencer no tiene sesión ni sistema de avisos, así que un fallo se
+  // cuenta con alert(): es feo, pero es lo único que verá con seguridad.
+  const exportarPdf = () => {
+    if (!influencer) return;
+    imprimirPdf({ influencer, items: monthItems, year: viewY, month: viewM },
+      (msg) => alert(msg));
+  };
+
+  const exportarWord = () => {
+    if (!influencer) return;
+    try {
+      descargarWord({ influencer, items: monthItems, year: viewY, month: viewM });
+    } catch {
+      alert("No se pudo generar el documento de Word. Prueba con la descarga en PDF.");
+    }
+  };
 
   if (loading && sinConexion) {
     return (
@@ -149,9 +169,26 @@ export default function PublicInfluencerPage({ params }: { params: Promise<{ cod
           {influencer.handle && <div style={{ fontSize: "12px", color: "var(--text-muted)" }}>{influencer.handle}</div>}
         </div>
       </div>
-      <p style={{ fontSize: "12px", color: "var(--text-muted)", marginBottom: "18px", display: "flex", alignItems: "center", gap: "6px" }}>
+      <p style={{ fontSize: "12px", color: "var(--text-muted)", marginBottom: "12px", display: "flex", alignItems: "center", gap: "6px" }}>
         <Lock size={12} /> Vista de solo lectura · calendario de contenido
       </p>
+
+      {/* Descarga del mes. Va arriba y bien visible: para quien abre esto desde
+          el móvil con mala conexión, llevarse el archivo es más útil que
+          volver a entrar cada vez. */}
+      <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "18px", flexWrap: "wrap" }}>
+        <span style={{ fontSize: "12px", color: "var(--text-muted)", fontWeight: 600 }}>
+          Descargar {monthLabel(viewY, viewM).toLowerCase()}:
+        </span>
+        <button className="btn-secondary" onClick={exportarPdf}
+          style={{ padding: "6px 12px", fontSize: "12px", borderRadius: "8px", cursor: "pointer", width: "auto" }}>
+          <FileDown size={13} /> PDF
+        </button>
+        <button className="btn-secondary" onClick={exportarWord}
+          style={{ padding: "6px 12px", fontSize: "12px", borderRadius: "8px", cursor: "pointer", width: "auto" }}>
+          <FileText size={13} /> Word
+        </button>
+      </div>
 
       {/* Navegación de mes */}
       <div className="card" style={{ padding: "12px 16px", marginBottom: "12px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>

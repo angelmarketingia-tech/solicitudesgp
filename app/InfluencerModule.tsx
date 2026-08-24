@@ -22,10 +22,11 @@
 import React, { useState, useEffect, useMemo } from "react";
 import {
   Users, Plus, Trash2, X, ChevronLeft, ChevronRight, Link2, Copy,
-  CalendarDays, ExternalLink,
+  CalendarDays, ExternalLink, FileDown, FileText,
 } from "lucide-react";
 import { db } from "@/lib/firebase";
 import { publicLink } from "@/lib/public-url";
+import { descargarWord, imprimirPdf } from "@/lib/influencer-export";
 import { collection, onSnapshot, query, where } from "firebase/firestore";
 import {
   Influencer, ContentItem, ContentStatus,
@@ -153,6 +154,26 @@ export default function InfluencerModule({ role, addToast }: Props) {
     } catch {
       // Fallback: mostrar el link para copiar a mano.
       addToast(url, "info");
+    }
+  };
+
+  // ── Exportación ──
+  // Se exporta el mes que se está viendo, que es lo que el influencer necesita
+  // para trabajar. `monthItems` ya viene filtrado a ese mes y a este influencer.
+  const exportarPdf = () => {
+    if (!selected) return;
+    addToast("Preparando el PDF… elige «Guardar como PDF» en la ventana de impresión.", "info");
+    imprimirPdf({ influencer: selected, items: monthItems, year: viewY, month: viewM },
+      (msg) => addToast(msg, "error"));
+  };
+
+  const exportarWord = () => {
+    if (!selected) return;
+    try {
+      descargarWord({ influencer: selected, items: monthItems, year: viewY, month: viewM });
+      addToast("Documento de Word descargado.", "success");
+    } catch {
+      addToast("No se pudo generar el documento de Word.", "error");
     }
   };
 
@@ -286,6 +307,20 @@ export default function InfluencerModule({ role, addToast }: Props) {
                 <div style={{ fontSize: "12px", color: "var(--text-muted)", display: "flex", alignItems: "center", gap: "6px", marginTop: "2px" }}>
                   <Link2 size={12} /> Link público de solo lectura ·
                   <button onClick={() => copyLink(selected)} style={{ background: "none", border: "none", color: "var(--accent-color)", cursor: "pointer", padding: 0, fontSize: "12px", fontWeight: 600, textDecoration: "underline", width: "auto" }}>copiar</button>
+                </div>
+                {/* Descarga del mes: para quien no consigue abrir el link. */}
+                <div style={{ display: "flex", alignItems: "center", gap: "7px", marginTop: "10px" }}>
+                  <span style={{ fontSize: "11px", color: "var(--text-muted)", fontWeight: 600 }}>Descargar mes:</span>
+                  <button className="btn-secondary" onClick={exportarPdf}
+                    title={`Descargar ${monthLabel(viewY, viewM)} en PDF`}
+                    style={{ padding: "5px 11px", fontSize: "11.5px", borderRadius: "8px", cursor: "pointer", width: "auto" }}>
+                    <FileDown size={13} /> PDF
+                  </button>
+                  <button className="btn-secondary" onClick={exportarWord}
+                    title={`Descargar ${monthLabel(viewY, viewM)} en Word`}
+                    style={{ padding: "5px 11px", fontSize: "11.5px", borderRadius: "8px", cursor: "pointer", width: "auto" }}>
+                    <FileText size={13} /> Word
+                  </button>
                 </div>
               </div>
               <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
