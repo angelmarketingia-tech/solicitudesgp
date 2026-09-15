@@ -18,11 +18,12 @@ import {
   addDoc, query, orderBy, serverTimestamp, getDoc, getDocs, limit, limitToLast, arrayUnion, runTransaction
 } from 'firebase/firestore';
 import { ref, deleteObject, listAll } from 'firebase/storage';
-import { emailForUser, DEFAULT_TRAFFICKER_EMAIL } from '@/lib/users';
+import { emailForUser, DEFAULT_TRAFFICKER_EMAIL, USER_DIRECTORY } from '@/lib/users';
 import { entrarConPersonal, cambiarPassword, recuperarPassword, MIN_PASSWORD } from '@/lib/account';
 import { compressImageToDataUrl, validateImage } from '@/lib/image';
 import { uploadToStorage, storageErrorMessage } from '@/lib/storage-upload';
 import { publicLink } from '@/lib/public-url';
+import { filtrarPorFechas, imprimirInforme, resumirSolicitudes } from '@/lib/report-export';
 import {
   mediaKindOf, maxBytesFor, formatMB,
   DELIVERABLE_EXTS, DELIVERABLE_ACCEPT, MAX_FILE_BYTES, MAX_VIDEO_BYTES,
@@ -68,17 +69,45 @@ const PRIORITY_CONFIG: Record<string, { bg: string; text: string; label: string 
 };
 const priorityConfig = PRIORITY_CONFIG;
 
-// Áreas solicitantes y canales de difusión
-const AREAS = ["Pauta", "Redes Sociales", "CMR"];
+// Áreas solicitantes y canales de difusión.
+//
+// AREAS son SUGERENCIAS, no la lista completa: el formulario ofrece además
+// "Otra…", que abre un campo de texto. Llegan solicitudes de Directiva y de
+// frentes que no existían cuando se escribió el catálogo, y meterlas a la
+// fuerza en tres opciones falseaba la contabilidad y el informe.
+const AREAS = ["Pauta", "Redes Sociales", "CMR", "Directiva"];
+// Valor centinela del <select> para "el área la escribo yo".
+const AREA_OTRA = "__otra__";
+
+/**
+ * Directorio para sugerir correos mientras se escribe.
+ *
+ * POR QUÉ: los correos corporativos son largos y es fácil teclearlos mal, y un
+ * correo equivocado significa que la entrega NO le llega a quien la pidió.
+ * Escribiendo "v" tiene que aparecer el de Verónica.
+ *
+ * OJO: esto NO precarga a nadie. La solicitud sigue saliendo solo con el correo
+ * de quien la levanta; las sugerencias aparecen únicamente al escribir.
+ */
+const CONTACTOS: { nombre: string; email: string }[] = Object.entries(USER_DIRECTORY)
+  .filter(([, email]) => Boolean(email))
+  .map(([nombre, email]) => ({ nombre, email }));
+
+/** Minúsculas y sin acentos, para que "veronica" encuentre a "Verónica". */
+const sinAcentos = (t: string) =>
+  t.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
 const CHANNELS = ["Facebook", "Instagram", "Página Web", "CMR"];
 
 // ── Tipo de solicitud: naturaleza del arte, para contabilidad del equipo ──
-type RequestKind = "Nueva Línea Gráfica" | "Giveaway" | "Línea Gráfica Existente";
+type RequestKind = "Nueva Línea Gráfica" | "Giveaway" | "Línea Gráfica Existente" | "E-CARDS";
 const REQUEST_KINDS: { id: RequestKind; label: string; emoji: string; desc: string; text: string; bg: string }[] = [
   { id: "Nueva Línea Gráfica",     label: "Nueva Línea Gráfica",     emoji: "🎨", desc: "Concepto/identidad visual desde cero", text: "#7c3aed", bg: "#f3e8ff" },
   { id: "Giveaway",                label: "Giveaway",                emoji: "🎁", desc: "Sorteo / dinámica de premios",        text: "#b54708", bg: "#fdf3e7" },
   { id: "Línea Gráfica Existente", label: "Línea Gráfica Existente", emoji: "🔁", desc: "Adaptación de una línea ya creada",    text: "#0b6bcb", bg: "#e8f1fc" },
+  { id: "E-CARDS",                 label: "E-CARDS",                 emoji: "💌", desc: "Tarjeta digital / pieza de correo",    text: "#00783e", bg: "#e6f2ec" },
 ];
+// Orden en el que los tipos aparecen en la contabilidad y en el informe.
+const KIND_IDS = REQUEST_KINDS.map(k => k.id) as readonly string[];
 const KIND_CONFIG: Record<RequestKind, { text: string; bg: string; emoji: string }> = REQUEST_KINDS.reduce(
   (acc, k) => { acc[k.id] = { text: k.text, bg: k.bg, emoji: k.emoji }; return acc; },
   {} as Record<RequestKind, { text: string; bg: string; emoji: string }>,
@@ -467,11 +496,16 @@ export default function GanaPlayMainApp() {
   const [editingReqId, setEditingReqId] = useState<string | null>(null); // id si estamos editando
   const [priority, setPriority] = useState<RequestPriority>("Medio");
   const [area, setArea] = useState(AREAS[0]);
+  // ¿El área se está escribiendo a mano? Se activa con la opción "Otra…" y
+  // también al editar una solicitud cuya área no está en el catálogo.
+  const [areaOtra, setAreaOtra] = useState(false);
   const [requesterName, setRequesterName] = useState("");
   // Varios correos del solicitante (la entrega les llega a todos). Arranca con
   // los predeterminados; se pueden quitar o agregar más.
   const [requesterEmails, setRequesterEmails] = useState<string[]>([]);
   const [emailInput, setEmailInput] = useState("");
+  // Sugerencia marcada con las flechas (Enter la agrega).
+  const [sugIdx, setSugIdx] = useState(0);
   const [objective, setObjective] = useState("");
   const [channels, setChannels] = useState<string[]>([]);
   const [initialComment, setInitialComment] = useState("");
@@ -494,6 +528,13 @@ export default function GanaPlayMainApp() {
   // Contabilidad: alcance (equipo vs propio) y filtro por tipo de solicitud.
   const [statsScope, setStatsScope] = useState<'Equipo' | 'Mías'>('Equipo');
   const [kindFilter, setKindFilter] = useState<RequestKind | 'Todos'>('Todos');
+  // Periodo del informe. Vacío = todo el histórico. Acota TAMBIÉN lo que se ve
+  // en pantalla, para que el PDF no pueda decir algo distinto de la pantalla
+  // desde la que se pidió.
+  const [infDesde, setInfDesde] = useState('');
+  const [infHasta, setInfHasta] = useState('');
+  // Redes Sociales de la Community Manager: calendario o sus entregas.
+  const [redesVista, setRedesVista] = useState<'Calendario' | 'Entregas'>('Calendario');
 
   const [chatOpen, setChatOpen] = useState(false);
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>(() => {
@@ -735,7 +776,7 @@ export default function GanaPlayMainApp() {
   useEffect(() => {
     if (!role) return;
     const def = PROFILE_DEFAULTS[role];
-    if (def?.area) setArea(def.area);
+    if (def?.area) { setArea(def.area); setAreaOtra(false); }
     setRequesterName(def?.requesterName || userName);
     // Solo el correo de quien está pidiendo la pieza. Antes se precargaban
     // tres correos fijos y la entrega le llegaba a gente que no la pidió;
@@ -841,6 +882,33 @@ export default function GanaPlayMainApp() {
   const removeRequesterEmail = (email: string) =>
     setRequesterEmails(prev => prev.filter(e => e !== email));
 
+  // Correos del directorio que casan con lo escrito, por nombre o por correo,
+  // sin los que ya están agregados.
+  //
+  // Ordena por lo que EMPIEZA con lo tecleado antes que por lo que solo lo
+  // contiene: escribiendo "v" tiene que salir primero Verónica, no "Juan David"
+  // (que también lleva una "v" dentro). Y lo primero de la lista es lo que
+  // agrega Enter.
+  const sugerenciasCorreo = useMemo(() => {
+    const q = sinAcentos(emailInput.trim());
+    if (!q) return [];
+    const ya = new Set(requesterEmails.map(e => e.toLowerCase()));
+    const rango = (c: { nombre: string; email: string }) => {
+      const n = sinAcentos(c.nombre), e = sinAcentos(c.email);
+      if (n.startsWith(q)) return 0;
+      if (e.startsWith(q)) return 1;
+      // También cuenta como principio el de cada palabra del nombre y el del
+      // apellido en el correo ("marquez" → veronica.marquez@…).
+      if (n.split(/[\s.]+/).some(w => w.startsWith(q)) || e.split(/[.@_-]+/).some(w => w.startsWith(q))) return 2;
+      return 3;
+    };
+    return CONTACTOS
+      .filter(c => !ya.has(c.email.toLowerCase()))
+      .filter(c => sinAcentos(c.nombre).includes(q) || sinAcentos(c.email).includes(q))
+      .sort((a, b) => rango(a) - rango(b) || a.nombre.localeCompare(b.nombre))
+      .slice(0, 6);
+  }, [emailInput, requesterEmails]);
+
   // ─── Dimensiones "Otro" (texto libre) ───
   const addCustomDimension = (raw: string) => {
     const d = raw.trim();
@@ -851,11 +919,50 @@ export default function GanaPlayMainApp() {
   // Dimensiones que NO están en la lista predefinida (las escritas a mano).
   const customDimensions = dimensions.filter(d => !DIMENSION_OPTIONS.some(o => o.key === d));
 
+  /**
+   * Informe en PDF del periodo elegido.
+   *
+   * "Mías" es el informe personal de cada diseñador; "Equipo" es el general y
+   * lleva además el desglose por diseñador. Se construye con el MISMO cálculo
+   * que pinta la contabilidad, así que no puede contradecirla.
+   */
+  const descargarInforme = useCallback((alcance: 'Mías' | 'Equipo') => {
+    const enRango = filtrarPorFechas(requests, { desde: infDesde, hasta: infHasta });
+    const base = alcance === 'Mías' ? enRango.filter(r => r.assignedTo === userName) : enRango;
+    if (base.length === 0) {
+      addToast('No hay solicitudes en ese periodo: el informe saldría vacío.', 'info');
+      return;
+    }
+    imprimirInforme({
+      solicitudes: base,
+      desde: infDesde,
+      hasta: infHasta,
+      alcance: alcance === 'Mías' ? `Diseñador: ${userName || '—'}` : 'Todo el equipo',
+      generadoPor: userName || 'GanaPlay Diseño',
+      incluirPorDisenador: alcance === 'Equipo',
+    }, KIND_IDS, (msg) => addToast(msg, 'error'));
+  }, [requests, infDesde, infHasta, userName, addToast]);
+
+  // Áreas ya usadas que no están en el catálogo. Se ofrecen en el mismo
+  // desplegable para que la segunda solicitud de Directiva se elija de un clic
+  // en vez de reescribirse: si no, la contabilidad acaba con "Directiva",
+  // "directiva" y "DIRECTIVA" contando por separado.
+  const areasUsadas = useMemo(() => {
+    const vistas = new Map<string, string>();
+    for (const r of requests) {
+      const a = (r.area || '').trim();
+      if (!a || AREAS.includes(a)) continue;
+      const clave = a.toLowerCase();
+      if (!vistas.has(clave)) vistas.set(clave, a);
+    }
+    return [...vistas.values()].sort((a, b) => a.localeCompare(b));
+  }, [requests]);
+
   // ─── Reset / abrir formulario ───
   const resetCreateForm = () => {
     setTitleStr(""); setCopyStr(""); setDimensions([]); setCustomDim(""); setCountries([]); setChannels([]);
     setReferenceImgs([]); setReferenceFiles([]); setPriority("Medio"); setFormat("static"); setRequestKind("Nueva Línea Gráfica");
-    setRequesterName(""); setRequesterEmails([]); setEmailInput(""); setObjective(""); setArea(AREAS[0]);
+    setRequesterName(""); setRequesterEmails([]); setEmailInput(""); setObjective(""); setArea(AREAS[0]); setAreaOtra(false);
     setInitialComment(""); setInitialCommentImgs([]);
   };
   const openCreateRequest = () => {
@@ -863,7 +970,7 @@ export default function GanaPlayMainApp() {
     resetCreateForm();
     // Reaplica los defaults del perfil (nombre, área, correo propio + predeterminados).
     const def = role ? PROFILE_DEFAULTS[role] : undefined;
-    if (def?.area) setArea(def.area);
+    if (def?.area) { setArea(def.area); setAreaOtra(false); }
     setRequesterName(def?.requesterName || userName);
     const own = emailForUser(userName) || (role === 'admin' ? DEFAULT_TRAFFICKER_EMAIL : '');
     setRequesterEmails(own ? [own.trim()] : []);
@@ -875,7 +982,9 @@ export default function GanaPlayMainApp() {
     setRequestKind(req.requestKind || "Nueva Línea Gráfica");
     setDimensions(req.dimensions || []); setCustomDim("");
     setCountries(req.countries || []); setChannels(req.channels || []);
-    setPriority(req.priority || "Medio"); setArea(req.area || AREAS[0]);
+    setPriority(req.priority || "Medio");
+    setArea(req.area || AREAS[0]);
+    setAreaOtra(Boolean(req.area) && !AREAS.includes(req.area as string));
     setRequesterName(req.requesterName || "");
     const ems = requesterEmailsOf(req);
     setRequesterEmails(ems.length ? ems : []); setEmailInput("");
@@ -917,12 +1026,22 @@ export default function GanaPlayMainApp() {
     }
     const requesterEmail = emails[0] || "";
     const requesterEmails2 = emails;
+    // Área tal como se va a guardar. Se recorta y, si coincide con una que ya
+    // existe salvo por mayúsculas o espacios, se reutiliza esa grafía: así la
+    // contabilidad no parte "Directiva" en varias áreas distintas. Si quedó
+    // vacía (eligió "Otra…" y no escribió nada), cae en la primera del
+    // catálogo en vez de guardar una solicitud sin área.
+    const areaEscrita = area.trim().replace(/\s+/g, ' ').slice(0, 40);
+    const areaFinal =
+      [...AREAS, ...areasUsadas].find(a => a.toLowerCase() === areaEscrita.toLowerCase()) ||
+      areaEscrita ||
+      AREAS[0];
 
     // ── Modo EDICIÓN: actualiza el brief de una solicitud existente ──
     if (editingReqId) {
       const patch = {
         title: titleStr || "Nuevo Requerimiento", copy: copyStr, format, requestKind,
-        dimensions: dims, countries, deliveryDate, priority, area,
+        dimensions: dims, countries, deliveryDate, priority, area: areaFinal,
         requesterName: solicitante, requesterEmail, requesterEmails: requesterEmails2, objective, channels,
         referenceImages: referenceImgs, referenceFiles,
         history: arrayUnion({ action: "Solicitud editada", by: userName, at: new Date().toISOString() }),
@@ -931,7 +1050,7 @@ export default function GanaPlayMainApp() {
       try {
         await updateDoc(doc(db, "requests", editingReqId), patch);
         setSelectedReq(prev => (prev && prev.id === editingReqId)
-          ? { ...prev, title: patch.title, copy: copyStr, format, requestKind, dimensions: dims, countries, deliveryDate, priority, area, requesterName: solicitante, requesterEmail, requesterEmails: requesterEmails2, objective, channels, referenceImages: referenceImgs, referenceFiles }
+          ? { ...prev, title: patch.title, copy: copyStr, format, requestKind, dimensions: dims, countries, deliveryDate, priority, area: areaFinal, requesterName: solicitante, requesterEmail, requesterEmails: requesterEmails2, objective, channels, referenceImages: referenceImgs, referenceFiles }
           : prev);
         const eid = editingReqId;
         setEditingReqId(null);
@@ -991,7 +1110,7 @@ export default function GanaPlayMainApp() {
       deliveryDate,
       status: "Pendiente",
       priority,
-      area,
+      area: areaFinal,
       requesterName: solicitante,
       requesterEmail,
       requesterEmails: requesterEmails2,
@@ -1038,7 +1157,7 @@ export default function GanaPlayMainApp() {
           type: "new_request",
           request: {
             id: idCreada, title: newReq.title, priority, deliveryDate,
-            area, objective, copy: copyStr, requesterName,
+            area: areaFinal, objective, copy: copyStr, requesterName,
           },
         });
       }
@@ -2270,32 +2389,55 @@ export default function GanaPlayMainApp() {
   // "no encontrada" en esa primera pasada, a quien recibe el enlace le saldría
   // un error con una solicitud que sí existe. Se sigue intentando hasta que
   // llegan los datos del servidor.
+  //
+  // OJO 2 — ESPERAR A QUE HAYA SESIÓN: las solicitudes se cargan desde que se
+  // abre la página, con la pantalla de login todavía delante. Antes este
+  // efecto encontraba la solicitud en ese momento, abría la ficha "por
+  // detrás", BORRABA el ?solicitud= de la dirección… y al iniciar sesión ya no
+  // quedaba nada que abrir: quien entraba desde el correo de entrega aterrizaba
+  // en el inicio del tablero. Ahora la solicitud pedida se guarda al abrir la
+  // página y solo se abre (y se limpia) con la sesión ya iniciada.
   const solicitudAbiertaPorEnlace = useRef(false);
   const esperandoEnlaceDesde = useRef<number | null>(null);
   useEffect(() => {
-    if (solicitudAbiertaPorEnlace.current) return;
+    try {
+      const enUrl = new URLSearchParams(window.location.search).get('solicitud');
+      if (enUrl) sessionStorage.setItem('gp_solicitud_pendiente', enUrl);
+    } catch { /* sin almacenamiento: se usa la URL tal cual */ }
+  }, []);
+  useEffect(() => {
+    if (solicitudAbiertaPorEnlace.current || !role) return;
     let pedida = "";
-    try { pedida = new URLSearchParams(window.location.search).get('solicitud') || ""; } catch { return; }
+    try {
+      pedida = new URLSearchParams(window.location.search).get('solicitud')
+        || sessionStorage.getItem('gp_solicitud_pendiente') || "";
+    } catch { return; }
     if (!pedida) return;
+
+    const olvidarEnlace = () => {
+      solicitudAbiertaPorEnlace.current = true;
+      try { sessionStorage.removeItem('gp_solicitud_pendiente'); } catch { /* */ }
+      try { window.history.replaceState({}, '', window.location.pathname); } catch { /* */ }
+    };
 
     const encontrada = requests.find(r => r.id === pedida);
     if (encontrada) {
-      solicitudAbiertaPorEnlace.current = true;
+      olvidarEnlace();
       setSelectedReq(encontrada);
       setModalOpen(true);
-      try { window.history.replaceState({}, '', window.location.pathname); } catch { /* */ }
       return;
     }
 
+    // El reloj empieza con la sesión iniciada, no mientras se escribe la
+    // contraseña.
     if (esperandoEnlaceDesde.current === null) esperandoEnlaceDesde.current = Date.now();
     const esperando = Date.now() - esperandoEnlaceDesde.current;
     // Solo tras darle tiempo al servidor se declara que no existe.
     if (!loadingData && requests.length > 0 && esperando > 12_000) {
-      solicitudAbiertaPorEnlace.current = true;
+      olvidarEnlace();
       addToast(`No encontramos la solicitud ${pedida}.`, 'error');
-      try { window.history.replaceState({}, '', window.location.pathname); } catch { /* */ }
     }
-  }, [requests, loadingData, addToast]);
+  }, [requests, loadingData, addToast, role]);
 
   // Correo de quien está usando la app: el que escribió al entrar, o el que le
   // corresponde por nombre en el directorio (quien entró por el menú de roles).
@@ -3039,15 +3181,22 @@ export default function GanaPlayMainApp() {
             working: requests.filter(r => r.assignedTo === d && r.status !== 'Publicado' && r.status !== 'Denegado' && r.status !== 'Declinada'),
           }));
 
-          // ── Contabilidad: alcance equipo vs. propio ──
-          const statsBase = statsScope === 'Mías' ? mine : requests;
-          const statusCount = (s: RequestStatus) => statsBase.filter(r => r.status === s).length;
+          // ── Contabilidad e informes ──
+          //
+          // El MISMO conjunto alimenta la pantalla y el PDF: el informe no
+          // puede acabar diciendo algo distinto de lo que se ve aquí.
+          const enRango = filtrarPorFechas(requests, { desde: infDesde, hasta: infHasta });
+          const statsBase = statsScope === 'Mías'
+            ? enRango.filter(r => r.assignedTo === userName)
+            : enRango;
+          const resumen = resumirSolicitudes(statsBase, KIND_IDS);
+          const hayPeriodo = Boolean(infDesde || infHasta);
           const statTiles = [
-            { label: 'Total', value: statsBase.length, color: 'var(--text-primary)', bg: 'var(--surface-1)' },
-            { label: 'Publicadas', value: statusCount('Publicado'), color: STATUS_TEXT_COLORS['Publicado'], bg: STATUS_COLORS['Publicado'] },
-            { label: 'En proceso', value: statsBase.filter(r => r.status === 'En Proceso' || r.status === 'Planeando').length, color: STATUS_TEXT_COLORS['En Proceso'], bg: STATUS_COLORS['En Proceso'] },
-            { label: 'Pendientes', value: statusCount('Pendiente'), color: priorityConfig['Alto'].text, bg: priorityConfig['Alto'].bg },
-            { label: 'Declinadas', value: statusCount('Declinada'), color: STATUS_TEXT_COLORS['Declinada'], bg: STATUS_COLORS['Declinada'] },
+            { label: 'Total', value: resumen.total, color: 'var(--text-primary)', bg: 'var(--surface-1)' },
+            { label: 'Publicadas', value: resumen.publicadas, color: STATUS_TEXT_COLORS['Publicado'], bg: STATUS_COLORS['Publicado'] },
+            { label: 'En proceso', value: resumen.enProceso, color: STATUS_TEXT_COLORS['En Proceso'], bg: STATUS_COLORS['En Proceso'] },
+            { label: 'Pendientes', value: resumen.pendientes, color: priorityConfig['Alto'].text, bg: priorityConfig['Alto'].bg },
+            { label: 'Declinadas', value: resumen.declinadas, color: STATUS_TEXT_COLORS['Declinada'], bg: STATUS_COLORS['Declinada'] },
           ];
           const kindStats = REQUEST_KINDS.map(k => {
             const rows = statsBase.filter(r => r.requestKind === k.id);
@@ -3061,7 +3210,7 @@ export default function GanaPlayMainApp() {
                 <div className="card" style={{ padding: '16px' }}>
                   <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '10px', marginBottom: '14px', flexWrap: 'wrap' }}>
                     <h3 style={{ margin: 0, fontSize: '14px', color: 'var(--accent-dark)', display: 'flex', alignItems: 'center', gap: '8px' }}>
-                      <List size={15} /> Contabilidad
+                      <List size={15} /> Contabilidad e informes
                     </h3>
                     <div style={{ display: 'flex', gap: '6px' }}>
                       {(['Equipo', 'Mías'] as const).map(s => (
@@ -3071,6 +3220,49 @@ export default function GanaPlayMainApp() {
                         </div>
                       ))}
                     </div>
+                  </div>
+
+                  {/* Periodo: acota lo de abajo Y lo que sale impreso */}
+                  <div style={{ display: 'flex', alignItems: 'flex-end', gap: '10px', flexWrap: 'wrap', marginBottom: '14px', padding: '12px', background: 'var(--surface-1)', border: '1px solid var(--border-color)', borderRadius: '12px' }}>
+                    <div>
+                      <div style={{ fontSize: '10px', fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '4px' }}>Desde</div>
+                      <input type="date" value={infDesde} max={infHasta || undefined}
+                        onChange={(e) => setInfDesde(e.target.value)}
+                        style={{ fontSize: '12px', padding: '7px 10px' }} />
+                    </div>
+                    <div>
+                      <div style={{ fontSize: '10px', fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '4px' }}>Hasta</div>
+                      <input type="date" value={infHasta} min={infDesde || undefined}
+                        onChange={(e) => setInfHasta(e.target.value)}
+                        style={{ fontSize: '12px', padding: '7px 10px' }} />
+                    </div>
+                    {hayPeriodo && (
+                      <button type="button" className="btn-secondary"
+                        style={{ padding: '8px 12px', fontSize: '12px', borderRadius: '10px', cursor: 'pointer' }}
+                        onClick={() => { setInfDesde(''); setInfHasta(''); }}>
+                        <X size={13} /> Todo el histórico
+                      </button>
+                    )}
+                    <div style={{ display: 'flex', gap: '8px', marginLeft: 'auto', flexWrap: 'wrap' }}>
+                      <button type="button" className="btn-secondary"
+                        style={{ padding: '8px 14px', fontSize: '12px', borderRadius: '10px', cursor: 'pointer' }}
+                        title="Solo las solicitudes asignadas a ti, en PDF"
+                        onClick={() => descargarInforme('Mías')}>
+                        <Download size={14} /> Mi informe
+                      </button>
+                      <button type="button" className="btn"
+                        style={{ padding: '8px 14px', fontSize: '12px' }}
+                        title="Todas las solicitudes del periodo, con desglose por diseñador"
+                        onClick={() => descargarInforme('Equipo')}>
+                        <Download size={14} /> Informe general
+                      </button>
+                    </div>
+                  </div>
+                  <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginBottom: '14px' }}>
+                    {hayPeriodo
+                      ? `Contando las solicitudes creadas ${infDesde ? `desde el ${infDesde}` : ''}${infDesde && infHasta ? ' ' : ''}${infHasta ? `hasta el ${infHasta}` : ''}.`
+                      : 'Contando todo el histórico. Elige un rango de fechas para acotar el informe.'}
+                    {' '}El PDF se abre en el diálogo de impresión: elige «Guardar como PDF».
                   </div>
 
                   {/* Conteo por estado */}
@@ -3110,6 +3302,57 @@ export default function GanaPlayMainApp() {
                       </div>
                     )}
                   </div>
+
+                  {/* Por área solicitante. Sale de los datos, no de un catálogo
+                      fijo: las áreas escritas a mano (Directiva y demás) tienen
+                      que contar igual que las de siempre. */}
+                  {resumen.porArea.length > 0 && (
+                    <>
+                      <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.5px', margin: '18px 0 8px' }}>Por área solicitante</div>
+                      <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                        {resumen.porArea.map(a => (
+                          <div key={a.clave} title={`${a.porEstado['Publicado'] || 0} publicadas`}
+                            style={{ padding: '8px 12px', borderRadius: '10px', border: '1px solid var(--border-color)', background: 'var(--surface-1)' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', fontWeight: 700, color: 'var(--text-primary)' }}>
+                              <Building2 size={12} color="var(--accent-color)" /> {a.clave}
+                              <span style={{ fontWeight: 800 }}>{a.total}</span>
+                            </div>
+                            <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '2px' }}>{a.porEstado['Publicado'] || 0} publicadas</div>
+                          </div>
+                        ))}
+                      </div>
+                    </>
+                  )}
+
+                  {/* Desglose individual: quién hizo cuánto. Solo en el alcance
+                      de equipo — en "solo mías" sobra una tabla de una fila. */}
+                  {statsScope === 'Equipo' && resumen.porDisenador.length > 0 && (
+                    <>
+                      <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.5px', margin: '18px 0 8px' }}>Desglose por diseñador</div>
+                      <div style={{ overflowX: 'auto' }}>
+                        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px' }}>
+                          <thead>
+                            <tr>
+                              {['Diseñador', 'Total', 'Publicadas', 'En proceso', 'Pendientes'].map((h, i) => (
+                                <th key={h} style={{ textAlign: i === 0 ? 'left' : 'center', padding: '8px 10px', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '0.5px', color: 'var(--text-secondary)', borderBottom: '1px solid var(--border-color)' }}>{h}</th>
+                              ))}
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {resumen.porDisenador.map(d => (
+                              <tr key={d.clave}>
+                                <td style={{ padding: '8px 10px', fontWeight: 700, color: d.clave === userName ? 'var(--accent-color)' : 'var(--text-primary)', borderBottom: '1px solid var(--border-color)' }}>{d.clave}</td>
+                                <td style={{ padding: '8px 10px', textAlign: 'center', fontWeight: 800, color: 'var(--text-primary)', borderBottom: '1px solid var(--border-color)' }}>{d.total}</td>
+                                <td style={{ padding: '8px 10px', textAlign: 'center', color: STATUS_TEXT_COLORS['Publicado'], borderBottom: '1px solid var(--border-color)' }}>{d.porEstado['Publicado'] || 0}</td>
+                                <td style={{ padding: '8px 10px', textAlign: 'center', color: STATUS_TEXT_COLORS['En Proceso'], borderBottom: '1px solid var(--border-color)' }}>{(d.porEstado['En Proceso'] || 0) + (d.porEstado['Planeando'] || 0)}</td>
+                                <td style={{ padding: '8px 10px', textAlign: 'center', color: priorityConfig['Alto'].text, borderBottom: '1px solid var(--border-color)' }}>{d.porEstado['Pendiente'] || 0}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </>
+                  )}
                 </div>
 
                 {/* Actividad del equipo en tiempo real */}
@@ -3419,9 +3662,101 @@ export default function GanaPlayMainApp() {
         {/* La pestaña se oculta arriba, pero `activeTab` se recuerda entre
             sesiones: sin esta guarda, un Operador que la tuviera abierta la
             seguiría viendo al volver a entrar. */}
-        {activeTab === 'Redes Sociales' && verCalendarioRedes && (
+        {activeTab === 'Redes Sociales' && verCalendarioRedes && role !== 'cm' && (
           <SocialMediaTab role={role} userName={userName} addToast={addToast} />
         )}
+
+        {/* Community Manager: su calendario y, al lado, la sección de ENTREGAS
+            con todo lo que Diseño le ha entregado de lo que ELLA pidió. */}
+        {activeTab === 'Redes Sociales' && verCalendarioRedes && role === 'cm' && (() => {
+          const correo = (miCorreo || '').toLowerCase();
+          const nombre = sinAcentos(userName || '');
+          // "Pedida por ella": su correo entre los del solicitante o su nombre
+          // de perfil como solicitante. Se miran las dos cosas porque las
+          // solicitudes antiguas no siempre guardaban el correo.
+          const esMia = (r: RequestType) =>
+            (correo !== '' && requesterEmailsOf(r).some(e => e.toLowerCase() === correo)) ||
+            (nombre !== '' && sinAcentos(r.requesterName || '') === nombre) ||
+            sinAcentos(r.requesterName || '') === 'community manager';
+          // Entrega = tiene al menos una pieza subida por Diseño.
+          const entregas = requests
+            .filter(r => esMia(r) && (r.creatives || []).length > 0)
+            .sort((a, b) => (b.deliveryDate || '').localeCompare(a.deliveryDate || ''));
+          return (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+              <div style={{ display: 'flex', gap: '6px' }}>
+                {(['Calendario', 'Entregas'] as const).map(v => (
+                  <div key={v} onClick={() => setRedesVista(v)}
+                    style={{ ...navItemStyle(redesVista === v), fontSize: '13px', padding: '8px 14px' }}>
+                    {v === 'Calendario' ? <><CalendarDays size={14} /> Calendario</> : <><CheckCircle2 size={14} /> Entregas ({entregas.length})</>}
+                  </div>
+                ))}
+              </div>
+
+              {redesVista === 'Calendario' && (
+                <SocialMediaTab role={role} userName={userName} addToast={addToast} />
+              )}
+
+              {redesVista === 'Entregas' && (
+                <div className="card" style={{ padding: '16px' }}>
+                  <h3 style={{ margin: '0 0 4px', fontSize: '15px', color: 'var(--accent-dark)', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    <CheckCircle2 size={16} /> Mis entregas
+                  </h3>
+                  <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '14px' }}>
+                    Las piezas que Diseño ha entregado de las solicitudes que tú pediste.
+                  </div>
+                  {entregas.length === 0 && (
+                    <div style={{ textAlign: 'center', padding: '36px', color: 'var(--text-muted)', fontSize: '13px' }}>
+                      Todavía no hay entregas de tus solicitudes.
+                    </div>
+                  )}
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                    {entregas.map(req => (
+                      <div key={req.id} className="card" style={{ padding: '14px', borderLeft: `4px solid ${STATUS_TEXT_COLORS[req.status] || 'var(--accent-color)'}` }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '12px', flexWrap: 'wrap' }}>
+                          <div style={{ minWidth: 0 }}>
+                            <div style={{ fontSize: '11px', color: 'var(--text-secondary)', marginBottom: '3px' }}>
+                              {req.id} • Entrega {req.deliveryDate || 'sin fecha'}{req.assignedTo ? ` • ${req.assignedTo}` : ''}
+                            </div>
+                            <div style={{ fontSize: '14px', fontWeight: 700, color: 'var(--text-primary)' }}>{req.title}</div>
+                            <div style={{ marginTop: '6px', display: 'flex', gap: '6px', flexWrap: 'wrap', alignItems: 'center' }}>
+                              <span className="badge" style={{ background: STATUS_COLORS[req.status], color: STATUS_TEXT_COLORS[req.status], fontSize: '10px' }}>{req.status}</span>
+                              {req.requestKind && <span className="badge" style={{ background: KIND_CONFIG[req.requestKind].bg, color: KIND_CONFIG[req.requestKind].text, fontSize: '10px' }}>{KIND_CONFIG[req.requestKind].emoji} {req.requestKind}</span>}
+                              <span style={{ fontSize: '11px', color: 'var(--text-secondary)' }}><ImageIcon size={11} style={{ display: 'inline', marginRight: '3px' }} />{req.creatives.length} pieza{req.creatives.length === 1 ? '' : 's'}</span>
+                            </div>
+                          </div>
+                          <button className="btn" style={{ padding: '8px 14px', fontSize: '12px' }}
+                            onClick={() => { setSelectedReq(req); setModalOpen(true); }}>
+                            Ver solicitud
+                          </button>
+                        </div>
+                        <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginTop: '12px' }}>
+                          {req.creatives.map((c, i) => {
+                            const tipo = mediaKindOf(c.type, c.url);
+                            return (
+                              <div key={creativeKey(c)} style={{ display: 'flex', alignItems: 'center', gap: '8px', border: '1px solid var(--border-color)', borderRadius: '10px', padding: '6px 8px', background: 'var(--surface-1)', maxWidth: '100%' }}>
+                                {tipo === 'image' || tipo === 'animated'
+                                  // eslint-disable-next-line @next/next/no-img-element
+                                  ? <img src={c.url} alt={c.type} style={{ width: '40px', height: '40px', objectFit: 'cover', borderRadius: '6px' }} />
+                                  : <div style={{ width: '40px', height: '40px', borderRadius: '6px', background: 'var(--surface-2)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>{tipo === 'video' ? <Play size={16} /> : <FileText size={16} />}</div>}
+                                <span style={{ fontSize: '11px', color: 'var(--text-primary)', maxWidth: '160px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.type || `Pieza ${i + 1}`}</span>
+                                <button className="btn-secondary" title="Descargar"
+                                  style={{ padding: '6px 8px', borderRadius: '8px', cursor: 'pointer' }}
+                                  onClick={() => handleDownload(c, req.id, req.dimensions?.[0] || 'General')}>
+                                  <Download size={13} />
+                                </button>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          );
+        })()}
 
         {activeTab === 'Contenido Influencers' && verInfluencers && (
           <InfluencerModule role={role} userName={userName} addToast={addToast} />
@@ -3588,9 +3923,31 @@ export default function GanaPlayMainApp() {
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
                 <div className="form-group">
                   <label className="label">Área solicitante</label>
-                  <select value={area} onChange={(e) => setArea(e.target.value)}>
+                  <select
+                    value={areaOtra ? AREA_OTRA : area}
+                    onChange={(e) => {
+                      const v = e.target.value;
+                      if (v === AREA_OTRA) { setAreaOtra(true); setArea(''); }
+                      else { setAreaOtra(false); setArea(v); }
+                    }}>
                     {AREAS.map(a => <option key={a} value={a}>{a}</option>)}
+                    {areasUsadas.length > 0 && (
+                      <optgroup label="Ya usadas">
+                        {areasUsadas.map(a => <option key={a} value={a}>{a}</option>)}
+                      </optgroup>
+                    )}
+                    <option value={AREA_OTRA}>Otra… (escribir)</option>
                   </select>
+                  {areaOtra && (
+                    <input
+                      type="text"
+                      autoFocus
+                      maxLength={40}
+                      placeholder="¿Qué área la pide? Ej.: Directiva"
+                      value={area}
+                      onChange={(e) => setArea(e.target.value)}
+                      style={{ marginTop: '8px' }} />
+                  )}
                 </div>
                 <div className="form-group">
                   <label className="label">Nombre del solicitante</label>
@@ -3618,20 +3975,59 @@ export default function GanaPlayMainApp() {
                   </div>
                 )}
 
-                {/* Agregar correo escrito a mano */}
+                {/* Agregar correo: escrito entero, o buscando por nombre */}
                 <div style={{ display: 'flex', gap: '8px' }}>
-                  <input type="email" placeholder="agregar otro correo… (Enter)" value={emailInput}
-                    onChange={(e) => setEmailInput(e.target.value)}
-                    onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ',') { e.preventDefault(); addRequesterEmail(emailInput); } }}
+                  <input type="text" placeholder="escribe un nombre o un correo… (Enter)" value={emailInput}
+                    autoComplete="off"
+                    onChange={(e) => { setEmailInput(e.target.value); setSugIdx(0); }}
+                    onKeyDown={(e) => {
+                      if (sugerenciasCorreo.length > 0 && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) {
+                        e.preventDefault();
+                        const paso = e.key === 'ArrowDown' ? 1 : sugerenciasCorreo.length - 1;
+                        setSugIdx(i => (i + paso) % sugerenciasCorreo.length);
+                        return;
+                      }
+                      if (e.key === 'Enter' || e.key === ',') {
+                        e.preventDefault();
+                        // Con la lista abierta, Enter agrega la sugerencia marcada:
+                        // así basta teclear "v" y pulsar Enter para sumar a Verónica.
+                        // Si lo escrito ya es un correo completo, manda lo escrito.
+                        const marcada = sugerenciasCorreo[sugIdx];
+                        if (marcada && !isValidEmail(emailInput)) addRequesterEmail(marcada.email);
+                        else addRequesterEmail(emailInput);
+                        setSugIdx(0);
+                      }
+                    }}
                     style={{ flex: 1 }} />
                   <button type="button" className="btn-secondary" style={{ padding: '9px 14px', fontSize: '13px', borderRadius: '10px', cursor: 'pointer' }} onClick={() => addRequesterEmail(emailInput)}>
                     <Plus size={15} /> Agregar
                   </button>
                 </div>
 
-                {/* Las sugerencias de correos del equipo se retiraron: en una
-                    solicitud solo tiene que aparecer el correo de quien la
-                    pide. Quien necesite sumar a alguien lo escribe arriba. */}
+                {/* Sugerencias del directorio corporativo.
+                    NO precargan a nadie: la solicitud sigue saliendo solo con el
+                    correo de quien la levanta. Aparecen al escribir, porque los
+                    correos son largos y uno mal tecleado deja la entrega sin
+                    llegar a quien la pidió. */}
+                {sugerenciasCorreo.length > 0 && (
+                  <div style={{ marginTop: '6px', border: '1px solid var(--border-color)', borderRadius: '10px', overflow: 'hidden', background: 'var(--surface-1)' }}>
+                    {sugerenciasCorreo.map((c, i) => (
+                      <div key={c.email}
+                        onMouseEnter={() => setSugIdx(i)}
+                        onClick={() => { addRequesterEmail(c.email); setSugIdx(0); }}
+                        style={{
+                          display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer',
+                          padding: '8px 12px', fontSize: '12px',
+                          background: i === sugIdx ? 'var(--accent-soft)' : 'transparent',
+                          borderTop: i === 0 ? 'none' : '1px solid var(--border-color)',
+                        }}>
+                        <AtSign size={12} color="var(--accent-color)" />
+                        <span style={{ fontWeight: 700, color: 'var(--text-primary)' }}>{c.nombre}</span>
+                        <span style={{ color: 'var(--text-secondary)' }}>{c.email}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
 
               <div className="form-group">

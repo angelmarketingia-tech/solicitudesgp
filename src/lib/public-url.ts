@@ -16,10 +16,23 @@
  * ya esté en una que sabemos pública (así se respeta el dominio propio).
  */
 
-/** Dirección pública configurada. El dominio propio es el valor por defecto. */
-export const PUBLIC_APP_URL = (
-  (process.env.NEXT_PUBLIC_APP_URL || "").trim() || "https://solicitudes.ganaplay.lat"
-).replace(/\/+$/, "");
+/** Dominio propio: a donde tienen que llevar los correos y los enlaces. */
+const DOMINIO_PROPIO = "https://solicitudes.ganaplay.lat";
+
+/**
+ * Dirección pública configurada. El dominio propio es el valor por defecto.
+ *
+ * OJO: una `NEXT_PUBLIC_APP_URL` en `*.vercel.app` se IGNORA. La variable
+ * estuvo documentada con `solicitudesgp.vercel.app` y así quedó puesta en
+ * Vercel: los correos de entrega mandaban a la dirección de respaldo en vez de
+ * a ganaplay.lat. Una dirección de Vercel nunca es la que se quiere dar como
+ * principal, así que no se le hace caso aunque esté configurada.
+ */
+export const PUBLIC_APP_URL = (() => {
+  const configurada = (process.env.NEXT_PUBLIC_APP_URL || "").trim().replace(/\/+$/, "");
+  if (!configurada || /\.vercel\.app$/i.test(configurada)) return DOMINIO_PROPIO;
+  return configurada;
+})();
 
 /** Hosts que sirven la app SIN pedir credenciales. */
 const HOSTS_PUBLICOS = new Set([

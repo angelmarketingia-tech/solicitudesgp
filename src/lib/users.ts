@@ -1,3 +1,5 @@
+import { PUBLIC_APP_URL } from "./public-url";
+
 /**
  * Directorio del equipo y configuración de correos predeterminados.
  *
@@ -73,7 +75,22 @@ export function emailForUser(name: string): string {
   return USER_DIRECTORY[name] || "";
 }
 
-/** URL pública de la aplicación, usada en los correos. */
-export const APP_URL =
-  (process.env.NEXT_PUBLIC_APP_URL || "").trim() ||
-  "https://solicitudesgp.vercel.app";
+/**
+ * URL pública de la aplicación, usada en los correos.
+ *
+ * Se reexporta de `public-url.ts` para que NO haya dos direcciones por
+ * defecto distintas: aquí caía en `solicitudesgp.vercel.app` —el dominio de
+ * respaldo— mientras los enlaces públicos salían del dominio propio, así que
+ * los botones de los correos mandaban a la gente a la dirección alterna.
+ */
+export const APP_URL = PUBLIC_APP_URL;
+
+/**
+ * Enlace a UNA solicitud concreta. Al abrirlo, la app le muestra su ficha en
+ * vez de dejar a la persona buscándola en el tablero (el parámetro
+ * `?solicitud=` ya lo entiende la portada).
+ */
+export function requestLink(id: string): string {
+  const limpio = String(id || "").trim();
+  return limpio ? `${APP_URL}/?solicitud=${encodeURIComponent(limpio)}` : APP_URL;
+}

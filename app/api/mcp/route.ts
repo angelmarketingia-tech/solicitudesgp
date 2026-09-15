@@ -71,7 +71,7 @@ const TOOLS = [
         objetivo: { type: "string", description: "Para qué es la pieza / qué debe conseguir." },
         fechaEntrega: { type: "string", description: "Fecha de entrega en formato AAAA-MM-DD. Por defecto, hoy." },
         prioridad: { type: "string", enum: [...VALID_PRIORITIES], description: "Bajo, Medio, Alto o Urgente. Por defecto Medio." },
-        area: { type: "string", enum: [...VALID_AREAS], description: "Área que la pide. Por defecto Pauta." },
+        area: { type: "string", description: `Área que la pide: texto libre. Habituales: ${VALID_AREAS.join(", ")}. Por defecto Pauta.` },
         tipo: { type: "string", enum: [...VALID_KINDS], description: "Tipo de solicitud creativa." },
         formato: { type: "string", description: "Formato de la pieza (por ejemplo static, video, gif)." },
         dimensiones: { type: "array", items: { type: "string" }, description: "Medidas o formatos pedidos, p. ej. [\"1080x1080\"]." },
@@ -93,7 +93,7 @@ const TOOLS = [
       properties: {
         estado: { type: "string", description: "Pendiente, Planeando, En Proceso, Publicado, Denegado o Declinada." },
         prioridad: { type: "string", enum: [...VALID_PRIORITIES] },
-        area: { type: "string", enum: [...VALID_AREAS] },
+        area: { type: "string", description: `Filtra por área (texto libre). Habituales: ${VALID_AREAS.join(", ")}.` },
         buscar: { type: "string", description: "Texto a buscar en el título o en quien la pidió." },
         soloMias: { type: "boolean", description: "Solo las solicitudes levantadas por esta persona." },
         limite: { type: "number", description: "Cuántas devolver como máximo (por defecto 25, tope 100)." },

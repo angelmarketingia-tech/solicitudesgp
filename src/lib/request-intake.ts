@@ -10,11 +10,47 @@
 import { createDoc, nextRequestId } from "./firestore-rest";
 
 export const VALID_PRIORITIES = ["Bajo", "Medio", "Alto", "Urgente"] as const;
-export const VALID_AREAS = ["Pauta", "Redes Sociales", "CMR"] as const;
+/**
+ * Áreas SUGERIDAS, no la lista cerrada.
+ *
+ * El área solicitante dejó de ser un catálogo fijo: llegan solicitudes de
+ * Directiva y de cualquier otro frente, y encerrarlas en tres opciones las
+ * hacía aterrizar todas en "Pauta", falseando la contabilidad y el informe.
+ * Ahora se admite cualquier texto (ver `normalizarArea`) y estas son las
+ * opciones que la interfaz ofrece de un clic.
+ */
+export const AREAS_SUGERIDAS = ["Pauta", "Redes Sociales", "CMR", "Directiva"] as const;
+
+/** Se mantiene el nombre anterior para quien ya lo importaba. */
+export const VALID_AREAS = AREAS_SUGERIDAS;
+
+export const AREA_POR_DEFECTO = "Pauta";
+
+/** Tope de longitud del área escrita a mano, para que no entre un texto largo. */
+const MAX_AREA = 40;
+
+/**
+ * Deja el área como se va a guardar: texto libre, recortado y sin duplicar por
+ * mayúsculas/espacios. Si viene vacía, cae en el área por defecto.
+ *
+ * Se reconoce una sugerencia escrita con otra caja ("PAUTA", "pauta ") y se
+ * guarda con la grafía del catálogo, para que la contabilidad no acabe con
+ * "Pauta" y "PAUTA" contando por separado.
+ */
+export function normalizarArea(raw?: string): string {
+  const texto = String(raw || "").trim().replace(/\s+/g, " ").slice(0, MAX_AREA);
+  if (!texto) return AREA_POR_DEFECTO;
+  const canon = (AREAS_SUGERIDAS as readonly string[]).find(
+    a => a.toLowerCase() === texto.toLowerCase(),
+  );
+  return canon || texto;
+}
+
 export const VALID_KINDS = [
   "Nueva Línea Gráfica",
   "Giveaway",
   "Línea Gráfica Existente",
+  "E-CARDS",
 ] as const;
 
 export type Priority = (typeof VALID_PRIORITIES)[number];
@@ -67,9 +103,7 @@ export async function crearSolicitud(
     (body.requesterName || "").trim() ||
     opciones.requesterNamePorDefecto ||
     "Calendario Deportivo";
-  const area = (VALID_AREAS as readonly string[]).includes(body.area || "")
-    ? (body.area as string)
-    : "Pauta";
+  const area = normalizarArea(body.area);
   const dimensions =
     Array.isArray(body.dimensions) && body.dimensions.length > 0 ? body.dimensions : ["General"];
   const countries =

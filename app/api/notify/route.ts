@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { sendEmail, brandEmail, ctaButton, designTeamEmails } from "@/lib/email";
-import { APP_URL } from "@/lib/users";
+import { requestLink } from "@/lib/users";
 
 /**
  * Alertas por correo del sistema de solicitudes.
@@ -93,7 +93,8 @@ export async function POST(req: Request) {
           row("Fecha de entrega", r.deliveryDate) +
           `<p style="margin:18px 0 0;font-size:13px;color:#6d6e71;">
              Ingresa al tablero de GanaPlay Diseño para gestionar esta solicitud.
-           </p>`,
+           </p>` +
+          ctaButton("Abrir la solicitud", requestLink(r.id)),
       });
       const result = await sendEmail({
         to: recipients,
@@ -131,7 +132,7 @@ export async function POST(req: Request) {
           `<p style="margin:18px 0 4px;font-size:13px;color:#6d6e71;">
              Ingresa al sistema para revisar y descargar el entregable:
            </p>` +
-          ctaButton("Ver y descargar la solicitud", `${APP_URL}`),
+          ctaButton("Ver y descargar la solicitud", requestLink(r.id)),
       });
       const result = await sendEmail({ to: recipients, subject, html });
       console.log(`[notify] delivery ${r.id} → ${recipients.join(", ")}:`, result.ok ? "enviado" : result.error);
@@ -158,7 +159,7 @@ export async function POST(req: Request) {
           `<p style="margin:18px 0 4px;font-size:13px;color:#6d6e71;">
              Si crees que es un error, contacta al equipo. Podés crear una nueva solicitud corrigiendo los puntos señalados.
            </p>` +
-          ctaButton("Ir a GanaPlay Diseño", `${APP_URL}`),
+          ctaButton("Ver la solicitud", requestLink(r.id)),
       });
       const result = await sendEmail({ to: recipients, subject, html });
       console.log(`[notify] decline ${r.id} → ${recipients.join(", ")}:`, result.ok ? "enviado" : result.error);
