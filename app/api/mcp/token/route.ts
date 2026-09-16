@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { checkRateLimit, getClientIp } from "@/lib/rate-limit";
+import { PUBLIC_APP_URL } from "@/lib/public-url";
 import { emailDeIdToken, findByEmail, mcpTokenFor, verificarCredenciales } from "@/lib/team";
 
 /**
@@ -64,8 +65,15 @@ export async function POST(req: Request) {
       );
     }
 
-    const url = new URL(req.url);
-    return NextResponse.json({ ok: true, token, url: `${url.origin}/api/mcp` });
+    // Se devuelven las DOS direcciones: la normal (con cabecera) y la que
+    // lleva el token dentro, para los clientes que solo aceptan una URL.
+    const base = PUBLIC_APP_URL || new URL(req.url).origin;
+    return NextResponse.json({
+      ok: true,
+      token,
+      url: `${base}/api/mcp`,
+      urlConToken: `${base}/api/mcp/t/${encodeURIComponent(token)}`,
+    });
   } catch {
     return NextResponse.json({ ok: false, error: "No se pudo generar el token." }, { status: 500 });
   }

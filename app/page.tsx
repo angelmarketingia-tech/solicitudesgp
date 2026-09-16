@@ -454,7 +454,7 @@ export default function GanaPlayMainApp() {
   const [mcpPass, setMcpPass] = useState("");
   const [mcpCargando, setMcpCargando] = useState(false);
   const [mcpError, setMcpError] = useState("");
-  const [mcpPanel, setMcpPanel] = useState<{ token: string; url: string } | null>(null);
+  const [mcpPanel, setMcpPanel] = useState<{ token: string; url: string; urlConToken?: string } | null>(null);
   const [loginDesignerName, setLoginDesignerName] = useState("");
   const [loginOperatorName, setLoginOperatorName] = useState("");
   const [loginAdministrativeName, setLoginAdministrativeName] = useState("");
@@ -2517,7 +2517,7 @@ export default function GanaPlayMainApp() {
         setMcpError(data.error || "No se pudo generar el token.");
         return;
       }
-      setMcpPanel({ token: data.token, url: data.url });
+      setMcpPanel({ token: data.token, url: data.url, urlConToken: data.urlConToken });
       setMcpPass("");
     } catch {
       setMcpError("Error de red. Intenta de nuevo.");
@@ -4923,11 +4923,17 @@ export default function GanaPlayMainApp() {
 
                   {mcpAbierto && (
                     <div style={{ marginTop: '14px' }}>
-                      <p style={{ fontSize: '12px', color: 'var(--text-muted)', margin: '0 0 14px', lineHeight: 1.55 }}>
+                      <p style={{ fontSize: '12px', color: 'var(--text-muted)', margin: '0 0 10px', lineHeight: 1.55 }}>
                         Tu agente podrá <strong>levantar solicitudes y consultar el tablero</strong> a tu
                         nombre, con tus mismos permisos. El token no caduca: confirma tu contraseña
                         para verlo y no lo compartas.
                       </p>
+                      {/* La guía sale del mismo texto que el README, generada con
+                          `npm run guia:pdf`. Aquí para que nadie tenga que pedirla. */}
+                      <a href="/guia-agente-ia.pdf" target="_blank" rel="noopener noreferrer"
+                        style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', fontSize: '12px', fontWeight: 700, color: 'var(--accent-color)', textDecoration: 'none', marginBottom: '14px' }}>
+                        <Download size={13} /> Descargar la guía paso a paso (PDF)
+                      </a>
 
                       {!mcpPanel ? (
                         <>
@@ -4949,47 +4955,76 @@ export default function GanaPlayMainApp() {
                         </>
                       ) : (
                         <>
-                          <label className="label">Dirección del servidor</label>
-                          <div style={{ fontFamily: 'monospace', fontSize: '11.5px', background: 'var(--surface-1)', border: '1px solid var(--border-color)', borderRadius: '8px', padding: '9px 11px', marginBottom: '12px', wordBreak: 'break-all', color: 'var(--text-primary)' }}>
-                            {mcpPanel.url}
-                          </div>
+                          {/* Tres formas de conectar, según lo que admita cada
+                              cliente. Cada una con su botón de copiar: pedirle a
+                              alguien que componga a mano una URL con un token de
+                              78 caracteres es pedirle que se equivoque. */}
+                          {(() => {
+                            const comando = `claude mcp add --transport http --scope user ganaplay ${mcpPanel.url} --header "Authorization: Bearer ${mcpPanel.token}"`;
+                            const enlaceConector = mcpPanel.urlConToken || `${mcpPanel.url}/t/${mcpPanel.token}`;
+                            const copiar = (texto: string, que: string) => {
+                              navigator.clipboard?.writeText(texto)
+                                .then(() => addToast(`${que} copiado.`, 'success'))
+                                .catch(() => addToast('No se pudo copiar. Selecciónalo a mano.', 'error'));
+                            };
+                            const caja: React.CSSProperties = {
+                              fontFamily: 'monospace', fontSize: '11px', background: 'var(--surface-1)',
+                              border: '1px solid var(--border-color)', borderRadius: '8px',
+                              padding: '9px 11px', marginBottom: '8px', wordBreak: 'break-all',
+                              color: 'var(--text-primary)', maxHeight: '96px', overflowY: 'auto',
+                            };
+                            const titulo: React.CSSProperties = {
+                              fontSize: '12px', fontWeight: 800, color: 'var(--text-primary)',
+                              margin: '0 0 2px',
+                            };
+                            const nota: React.CSSProperties = {
+                              fontSize: '11px', color: 'var(--text-muted)', margin: '0 0 8px', lineHeight: 1.5,
+                            };
+                            const botonCopiar = (texto: string, que: string) => (
+                              <button className="btn-ghost" style={{ width: '100%', padding: '8px', fontSize: '12px', borderRadius: '9px', cursor: 'pointer' }}
+                                onClick={() => copiar(texto, que)}>
+                                Copiar
+                              </button>
+                            );
+                            return (
+                              <>
+                                <div style={{ marginBottom: '18px' }}>
+                                  <p style={titulo}>1 · Claude Code</p>
+                                  <p style={nota}>Pega esto en la terminal. Queda disponible en todos tus proyectos.</p>
+                                  <div style={caja}>{comando}</div>
+                                  {botonCopiar(comando, 'Comando')}
+                                </div>
 
-                          <label className="label">Tu token personal</label>
-                          <div style={{ fontFamily: 'monospace', fontSize: '11.5px', background: 'var(--surface-1)', border: '1px solid var(--border-color)', borderRadius: '8px', padding: '9px 11px', marginBottom: '12px', wordBreak: 'break-all', color: 'var(--text-primary)' }}>
-                            {mcpPanel.token}
-                          </div>
+                                <div style={{ marginBottom: '18px' }}>
+                                  <p style={titulo}>2 · Conector de claude.ai o Claude Desktop</p>
+                                  <p style={nota}>
+                                    Ajustes → Conectores → Añadir conector personalizado, y pega este enlace.
+                                    Lleva tu token dentro, así que trátalo como una contraseña.
+                                  </p>
+                                  <div style={caja}>{enlaceConector}</div>
+                                  {botonCopiar(enlaceConector, 'Enlace')}
+                                </div>
 
-                          <p style={{ fontSize: '11.5px', color: 'var(--text-muted)', margin: '0 0 8px', lineHeight: 1.5 }}>
-                            En Claude Code, pega este comando en la terminal:
-                          </p>
-                          <div style={{ fontFamily: 'monospace', fontSize: '11px', background: 'var(--surface-1)', border: '1px solid var(--border-color)', borderRadius: '8px', padding: '9px 11px', marginBottom: '12px', wordBreak: 'break-all', color: 'var(--text-primary)' }}>
-                            {`claude mcp add --transport http ganaplay ${mcpPanel.url} --header "Authorization: Bearer ${mcpPanel.token}"`}
-                          </div>
+                                <div style={{ marginBottom: '18px' }}>
+                                  <p style={titulo}>3 · Por si lo necesitas suelto</p>
+                                  <p style={nota}>Dirección del servidor y token, para cualquier otro cliente MCP.</p>
+                                  <div style={caja}>{mcpPanel.url}</div>
+                                  <div style={caja}>{mcpPanel.token}</div>
+                                  {botonCopiar(mcpPanel.token, 'Token')}
+                                </div>
 
-                          <div style={{ display: 'flex', gap: '8px' }}>
-                            <button className="btn-ghost" style={{ flex: 1, padding: '9px', fontSize: '12px', borderRadius: '9px', cursor: 'pointer' }}
-                              onClick={() => {
-                                navigator.clipboard?.writeText(
-                                  `claude mcp add --transport http ganaplay ${mcpPanel.url} --header "Authorization: Bearer ${mcpPanel.token}"`
-                                ).then(() => addToast('Comando copiado.', 'success'))
-                                 .catch(() => addToast('No se pudo copiar. Selecciónalo a mano.', 'error'));
-                              }}>
-                              Copiar comando
-                            </button>
-                            <button className="btn-ghost" style={{ flex: 1, padding: '9px', fontSize: '12px', borderRadius: '9px', cursor: 'pointer' }}
-                              onClick={() => {
-                                navigator.clipboard?.writeText(mcpPanel.token)
-                                  .then(() => addToast('Token copiado.', 'success'))
-                                  .catch(() => addToast('No se pudo copiar. Selecciónalo a mano.', 'error'));
-                              }}>
-                              Copiar token
-                            </button>
-                          </div>
+                                <p style={{ ...nota, marginBottom: '2px' }}>
+                                  Para comprobar que quedó bien, pídele a tu agente:
+                                  <em> «¿con qué cuenta estás conectado a GanaPlay?»</em>
+                                </p>
 
-                          <button onClick={() => { setMcpPanel(null); setMcpPass(''); }}
-                            style={{ background: 'none', border: 'none', color: 'var(--text-muted)', fontSize: '11.5px', cursor: 'pointer', textDecoration: 'underline', padding: '10px 0 0', width: 'auto' }}>
-                            Ocultar
-                          </button>
+                                <button onClick={() => { setMcpPanel(null); setMcpPass(''); }}
+                                  style={{ background: 'none', border: 'none', color: 'var(--text-muted)', fontSize: '11.5px', cursor: 'pointer', textDecoration: 'underline', padding: '10px 0 0', width: 'auto' }}>
+                                  Ocultar
+                                </button>
+                              </>
+                            );
+                          })()}
                         </>
                       )}
                     </div>
