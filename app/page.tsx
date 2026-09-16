@@ -8,7 +8,7 @@ import {
   CheckCircle2, Clock,
   LogOut, AlertCircle, UploadCloud, Bot, Send, Trash2,
   Download, Bell, Sparkles, Target, Building2, ClipboardList, AtSign, Users, Megaphone, Pencil, Link2, FolderKanban,
-  Play
+  Play, BarChart3
 } from 'lucide-react';
 
 // ─── Firebase ───
@@ -29,6 +29,7 @@ import {
   DELIVERABLE_EXTS, DELIVERABLE_ACCEPT, MAX_FILE_BYTES, MAX_VIDEO_BYTES,
 } from '@/lib/media';
 import SocialMediaTab from './SocialMediaTab';
+import AnalyticsTab from './AnalyticsTab';
 import InfluencerModule from './InfluencerModule';
 import PromoModule from './PromoModule';
 
@@ -68,6 +69,12 @@ const PRIORITY_CONFIG: Record<string, { bg: string; text: string; label: string 
   "Urgente": { bg: "#fdecea", text: "#d92d20", label: "Urgente" },
 };
 const priorityConfig = PRIORITY_CONFIG;
+
+// Los mismos colores del tablero, en el formato que espera el módulo de
+// indicadores. Se deriva de los de arriba para que no haya dos verdades.
+const ESTADO_COLORES: Record<string, { bg: string; text: string }> = Object.fromEntries(
+  Object.keys(STATUS_COLORS).map(k => [k, { bg: STATUS_COLORS[k], text: STATUS_TEXT_COLORS[k] }]),
+);
 
 // Áreas solicitantes y canales de difusión.
 //
@@ -2941,6 +2948,9 @@ export default function GanaPlayMainApp() {
           {role === 'designer' && (
             <div style={navItemStyle(activeTab === 'Equipo Diseño')} onClick={() => setActiveTab('Equipo Diseño')}><Sparkles size={15} /> Centro de Diseño</div>
           )}
+          {role === 'designer' && (
+            <div style={navItemStyle(activeTab === 'Indicadores')} onClick={() => setActiveTab('Indicadores')}><BarChart3 size={15} /> Indicadores</div>
+          )}
           <div style={navItemStyle(activeTab === 'Historial')} onClick={() => setActiveTab('Historial')}><Clock size={15} /> Historial</div>
           <div style={navItemStyle(activeTab === 'Tabla Principal')} onClick={() => setActiveTab('Tabla Principal')}><List size={15} /> Tabla</div>
           </>}
@@ -3662,6 +3672,17 @@ export default function GanaPlayMainApp() {
         {/* La pestaña se oculta arriba, pero `activeTab` se recuerda entre
             sesiones: sin esta guarda, un Operador que la tuviera abierta la
             seguiría viendo al volver a entrar. */}
+        {/* Indicadores: el informe de fin de mes del equipo de Diseño. */}
+        {activeTab === 'Indicadores' && role === 'designer' && (
+          <AnalyticsTab
+            solicitudes={requests}
+            userName={userName}
+            disenadores={DESIGNER_USERS}
+            tipos={KIND_IDS}
+            coloresEstado={ESTADO_COLORES}
+            addToast={addToast} />
+        )}
+
         {activeTab === 'Redes Sociales' && verCalendarioRedes && role !== 'cm' && (
           <SocialMediaTab role={role} userName={userName} addToast={addToast} />
         )}

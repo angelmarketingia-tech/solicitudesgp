@@ -17,26 +17,20 @@
 // flex o grid.
 
 // ─── Datos de entrada ───────────────────────────────────────────────────────
+//
+// La forma de una solicitud y el filtro por fechas viven en `analytics.ts`, que
+// es la base: este módulo IMPRIME lo que aquel CALCULA. Se reexportan para no
+// romper a quien ya los importaba desde aquí.
+import {
+  VERDE_MARCA,
+  etiquetaMes, fechaDeCorte, filtrarPorFechas, repartoPorCategoria,
+  resumenAnalitico, universoDeCategorias,
+} from "./analytics";
+import type { RangoFechas, SolicitudAnalitica } from "./analytics";
 
-/** Lo mínimo que el informe necesita de una solicitud. */
-export type SolicitudInforme = {
-  id: string;
-  title: string;
-  status: string;
-  priority?: string;
-  requestKind?: string;
-  area?: string;
-  requesterName?: string;
-  assignedTo?: string;
-  requestDate?: string;   // yyyy-mm-dd
-  deliveryDate?: string;  // yyyy-mm-dd
-};
-
-export type RangoFechas = {
-  /** yyyy-mm-dd. Cadena vacía = sin límite por ese lado. */
-  desde: string;
-  hasta: string;
-};
+export type { RangoFechas, SolicitudAnalitica };
+export type SolicitudInforme = SolicitudAnalitica;
+export { fechaDeCorte, filtrarPorFechas };
 
 export type DatosInforme = RangoFechas & {
   solicitudes: SolicitudInforme[];
@@ -89,35 +83,6 @@ function fechaLarga(iso: string): string {
   const [y, m, d] = String(iso || "").split("-").map(Number);
   if (!y || !m || !d) return iso || "";
   return `${d} de ${MESES[m - 1]} de ${y}`;
-}
-
-/**
- * Fecha por la que se filtra y se ordena una solicitud.
- *
- * Es la de CREACIÓN: el informe responde "cuántas solicitudes entraron en este
- * periodo", no "cuántas se entregaron". Las solicitudes viejas sin
- * `requestDate` caen en su fecha de entrega para no quedarse fuera del informe
- * sin que nadie se entere.
- */
-export function fechaDeCorte(r: SolicitudInforme): string {
-  return (r.requestDate || r.deliveryDate || "").slice(0, 10);
-}
-
-/** Filtra por rango de fechas. Los extremos entran (>= desde, <= hasta). */
-export function filtrarPorFechas<T extends SolicitudInforme>(
-  solicitudes: T[],
-  { desde, hasta }: RangoFechas,
-): T[] {
-  if (!desde && !hasta) return solicitudes;
-  return solicitudes.filter(r => {
-    const f = fechaDeCorte(r);
-    // Sin fecha no se puede situar en el periodo: queda fuera de un informe
-    // acotado (en el informe sin rango sí aparece).
-    if (!f) return false;
-    if (desde && f < desde) return false;
-    if (hasta && f > hasta) return false;
-    return true;
-  });
 }
 
 // ─── El cálculo, uno solo para pantalla e impresión ─────────────────────────
@@ -281,6 +246,195 @@ export function textoPeriodo({ desde, hasta }: RangoFechas): string {
   return "Todo el histórico";
 }
 
+
+// ─── Gráficas del informe (SVG en línea) ────────────────────────────────────
+//
+// SVG y no imágenes: el PDF sale del motor de impresión del navegador, que las
+// dibuja como vectores —se pueden ampliar sin que se pixelen— y no hace falta
+// ninguna librería. Los mismos criterios que en pantalla: una sola serie va en
+// un solo color, cada marca lleva su cifra escrita al lado, y las porciones se
+// separan con un hueco del color del papel, nunca con un borde.
+
+const ALTO_FILA = 26;
+
+/** Barras horizontales con la cifra en la punta. */
+function barrasSvg(
+  filas: { clave: string; valor: number; color: string }[],
+  opciones: { ancho?: number; anchoEtiqueta?: number } = {},
+): string {
+  if (filas.length === 0) return "";
+  const ancho = opciones.ancho ?? 500;
+  const anchoEtiqueta = opciones.anchoEtiqueta ?? 132;
+  const anchoValor = 40;
+  const pista = ancho - anchoEtiqueta - anchoValor;
+  const maximo = Math.max(1, ...filas.map(f => f.valor));
+  const alto = filas.length * ALTO_FILA;
+
+  const cuerpo = filas.map((f, i) => {
+    const y = i * ALTO_FILA;
+    const largo = Math.max((f.valor / maximo) * pista, f.valor > 0 ? 2 : 0);
+    return `
+      <text x="0" y="${y + 15}" style="font-size:11px;fill:${TEXTO};">${esc(recortar(f.clave, 20))}</text>
+      <rect x="${anchoEtiqueta}" y="${y + 4}" width="${largo}" height="14" rx="4" ry="4" fill="${f.color}" />
+      <text x="${anchoEtiqueta + pista + anchoValor}" y="${y + 15}" text-anchor="end" style="font-size:11px;font-weight:bold;fill:${TEXTO};">${f.valor}</text>`;
+  }).join("");
+
+  return `<svg width="${ancho}" height="${alto}" viewBox="0 0 ${ancho} ${alto}" xmlns="http://www.w3.org/2000/svg" style="max-width:100%;">${cuerpo}</svg>`;
+}
+
+/** Anillo de participación, con su leyenda al lado. */
+function anilloSvg(filas: { clave: string; valor: number; color: string }[], unidad: string): string {
+  const total = filas.reduce((n, f) => n + f.valor, 0);
+  if (total <= 0) return "";
+  const TAM = 168, GROSOR = 24;
+  const r = (TAM - GROSOR) / 2;
+  const c = TAM / 2;
+  const hueco = 2 / r;
+
+  let angulo = -Math.PI / 2;
+  const arcos = filas.map(f => {
+    const barrido = (f.valor / total) * Math.PI * 2;
+    const ini = angulo + hueco / 2;
+    const fin = angulo + barrido - hueco / 2;
+    angulo += barrido;
+    if (fin <= ini) return "";
+    const x1 = c + r * Math.cos(ini), y1 = c + r * Math.sin(ini);
+    const x2 = c + r * Math.cos(fin), y2 = c + r * Math.sin(fin);
+    const grande = fin - ini > Math.PI ? 1 : 0;
+    return `<path d="M ${x1} ${y1} A ${r} ${r} 0 ${grande} 1 ${x2} ${y2}" fill="none" stroke="${f.color}" stroke-width="${GROSOR}" />`;
+  }).join("");
+
+  const leyenda = filas.map(f => `
+    <tr>
+      <td style="padding:3px 6px 3px 0;"><span style="display:inline-block;width:10px;height:10px;border-radius:3px;background:${f.color};"></span></td>
+      <td style="padding:3px 10px 3px 0;font-size:11px;color:${TEXTO};">${esc(f.clave)}</td>
+      <td style="padding:3px 8px 3px 0;font-size:11px;font-weight:bold;color:${TEXTO};text-align:right;">${f.valor}</td>
+      <td style="padding:3px 0;font-size:11px;color:${APAGADO};text-align:right;">${Math.round((f.valor / total) * 100)}%</td>
+    </tr>`).join("");
+
+  return `<table style="border-collapse:collapse;"><tr>
+    <td style="padding-right:18px;vertical-align:middle;">
+      <svg width="${TAM}" height="${TAM}" viewBox="0 0 ${TAM} ${TAM}" xmlns="http://www.w3.org/2000/svg">
+        ${arcos}
+        <text x="${c}" y="${c - 2}" text-anchor="middle" style="font-size:24px;font-weight:bold;fill:${TEXTO};">${total}</text>
+        <text x="${c}" y="${c + 15}" text-anchor="middle" style="font-size:10px;fill:${APAGADO};">${esc(unidad)}</text>
+      </svg>
+    </td>
+    <td style="vertical-align:middle;"><table style="border-collapse:collapse;">${leyenda}</table></td>
+  </tr></table>`;
+}
+
+/** Columnas por mes. */
+function columnasSvg(filas: { clave: string; valor: number }[]): string {
+  if (filas.length === 0) return "";
+  const ANCHO_COL = 54, ALTO_PLOT = 120, BANDA = 34;
+  const ancho = Math.max(filas.length * ANCHO_COL, 120);
+  const alto = ALTO_PLOT + BANDA;
+  const maximo = Math.max(1, ...filas.map(f => f.valor));
+
+  const cuerpo = filas.map((f, i) => {
+    const x = i * ANCHO_COL;
+    const h = Math.max((f.valor / maximo) * (ALTO_PLOT - 18), f.valor > 0 ? 2 : 0);
+    const y = ALTO_PLOT - h;
+    return `
+      <text x="${x + ANCHO_COL / 2}" y="${y - 5}" text-anchor="middle" style="font-size:10px;font-weight:bold;fill:${TEXTO};">${f.valor}</text>
+      <rect x="${x + ANCHO_COL / 2 - 11}" y="${y}" width="22" height="${h}" rx="4" ry="4" fill="${VERDE}" />
+      <text x="${x + ANCHO_COL / 2}" y="${ALTO_PLOT + 16}" text-anchor="middle" style="font-size:10px;fill:${APAGADO};">${esc(f.clave)}</text>`;
+  }).join("");
+
+  return `<svg width="${ancho}" height="${alto}" viewBox="0 0 ${ancho} ${alto}" xmlns="http://www.w3.org/2000/svg" style="max-width:100%;">
+    <line x1="0" y1="${ALTO_PLOT}" x2="${ancho}" y2="${ALTO_PLOT}" stroke="${BORDE}" stroke-width="1" />
+    ${cuerpo}
+  </svg>`;
+}
+
+/** Recorta sin cortar a mitad de palabra cuando puede. */
+function recortar(texto: string, maximo: number): string {
+  const t = String(texto || "");
+  return t.length <= maximo ? t : `${t.slice(0, maximo - 1)}…`;
+}
+
+/** Marco de una gráfica dentro del documento. */
+function panel(titulo: string, subtitulo: string, contenido: string): string {
+  if (!contenido) return "";
+  return `<td style="vertical-align:top;padding:0 8px 0 0;" width="50%">
+    <table width="100%" style="border-collapse:collapse;"><tr><td style="border:1px solid ${BORDE};border-radius:12px;padding:14px 16px;">
+      <div style="font-size:12px;font-weight:bold;color:${VERDE_OSCURO};">${esc(titulo)}</div>
+      <div style="font-size:10px;color:${APAGADO};margin:2px 0 12px;">${esc(subtitulo)}</div>
+      ${contenido}
+    </td></tr></table>
+  </td>`;
+}
+
+/**
+ * Indicadores de producción: lo que se mira a fin de mes.
+ *
+ * Sale del MISMO cálculo que la pantalla de Indicadores (`resumenAnalitico`),
+ * así que el PDF no puede decir una cifra distinta de la que se vio antes de
+ * pulsar el botón.
+ */
+function seccionIndicadores(
+  solicitudes: SolicitudAnalitica[],
+  ordenTipos: readonly string[],
+  incluirPorDisenador: boolean,
+): string {
+  const a = resumenAnalitico(solicitudes, { ordenTipos });
+  if (a.solicitudes === 0) return "";
+
+  const universoAreas = universoDeCategorias(solicitudes, r => (r.area || "").trim() || "Sin área");
+  const areas = repartoPorCategoria(a.porArea, f => f.piezas, universoAreas);
+
+  const disenadores = a.porDisenador
+    .filter(f => f.piezas > 0 || f.solicitudes > 0)
+    .map(f => ({ clave: f.clave, valor: f.piezas, color: VERDE_MARCA }));
+
+  // Un solo color: comparación de magnitud, con el nombre al lado de cada barra.
+  const tipos = a.porTipo.map(f => ({ clave: f.clave, valor: f.solicitudes, color: VERDE_MARCA }));
+
+  const meses = a.porMes.map(m => ({ clave: etiquetaMes(m.mes), valor: m.solicitudes }));
+
+  const cumplimiento = a.cumplimiento.medidas > 0 ? `${a.cumplimiento.porcentaje}%` : "—";
+  const notaCumplimiento = a.cumplimiento.medidas > 0
+    ? `${a.cumplimiento.aTiempo} de ${a.cumplimiento.medidas} publicadas dentro de la fecha`
+    : "Sin publicaciones con fecha registrada";
+
+  const fichas = `
+  <table width="100%" style="border-collapse:collapse;margin-bottom:6px;"><tr>
+    ${tarjeta(a.solicitudes, "Solicitudes", TEXTO, PAPEL)}
+    ${tarjeta(a.principales, "Diseños principales", TEXTO, PAPEL)}
+    ${tarjeta(a.redimensiones, "Redimensiones", TEXTO, PAPEL)}
+    ${tarjeta(a.piezas, "Total de piezas", VERDE, VERDE_CLARO)}
+    <td style="padding:0;" width="20%">
+      <table width="100%" style="border-collapse:collapse;"><tr>
+        <td style="background:${PAPEL};border:1px solid ${BORDE};border-radius:10px;padding:12px 14px;">
+          <div style="font-size:26px;font-weight:bold;color:${TEXTO};line-height:1;">${cumplimiento}</div>
+          <div style="font-size:11px;color:${APAGADO};margin-top:5px;font-weight:bold;">Cumplimiento</div>
+        </td>
+      </tr></table>
+    </td>
+  </tr></table>
+  <p style="margin:0 0 18px;font-size:10px;color:${APAGADO};">
+    Cumplimiento: ${esc(notaCumplimiento)}${a.cumplimiento.sinDato > 0 ? ` · ${a.cumplimiento.sinDato} sin fecha de publicación registrada` : ""}.
+    Una pieza es un entregable subido; el primero de cada solicitud cuenta como diseño principal y el resto como redimensiones.
+  </p>`;
+
+  const fila1 = [
+    incluirPorDisenador ? panel("Producción por diseñador", "Piezas realizadas en el periodo", barrasSvg(disenadores)) : "",
+    panel("Producción por área", "Participación sobre el total de piezas", anilloSvg(areas, "piezas")),
+  ].filter(Boolean).join("");
+
+  const fila2 = [
+    panel("Solicitudes por tipo", "Nueva línea gráfica, E-CARDS, giveaways…", barrasSvg(tipos)),
+    panel("Solicitudes por mes", "Cómo se reparte el periodo", columnasSvg(meses)),
+  ].filter(Boolean).join("");
+
+  return `
+  <h2 style="font-size:14px;color:${VERDE_OSCURO};margin:0 0 12px;padding-bottom:6px;border-bottom:2px solid ${VERDE_CLARO};">Indicadores de producción</h2>
+  ${fichas}
+  <table width="100%" style="border-collapse:collapse;margin-bottom:10px;"><tr>${fila1}</tr></table>
+  <table width="100%" style="border-collapse:collapse;"><tr>${fila2}</tr></table>`;
+}
+
 export function construirInforme(datos: DatosInforme, ordenTipos: readonly string[] = []): string {
   const { solicitudes, alcance, generadoPor, incluirPorDisenador } = datos;
   const r = resumirSolicitudes(solicitudes, ordenTipos);
@@ -304,9 +458,8 @@ export function construirInforme(datos: DatosInforme, ordenTipos: readonly strin
   </p>`;
 
   const consolidado = `
-  <h2 style="font-size:14px;color:${VERDE_OSCURO};margin:0 0 12px;padding-bottom:6px;border-bottom:2px solid ${VERDE_CLARO};">Consolidado</h2>
+  <h2 style="font-size:14px;color:${VERDE_OSCURO};margin:26px 0 12px;padding-bottom:6px;border-bottom:2px solid ${VERDE_CLARO};">Reparto por estado</h2>
   <table width="100%" style="border-collapse:collapse;"><tr>
-    ${tarjeta(r.total, "Total", TEXTO, PAPEL)}
     ${tarjeta(r.publicadas, "Publicadas", COLOR_ESTADO["Publicado"].text, COLOR_ESTADO["Publicado"].bg)}
     ${tarjeta(r.enProceso, "En proceso", COLOR_ESTADO["En Proceso"].text, COLOR_ESTADO["En Proceso"].bg)}
     ${tarjeta(r.pendientes, "Pendientes", COLOR_ESTADO["Pendiente"].text, COLOR_ESTADO["Pendiente"].bg)}
@@ -320,6 +473,7 @@ export function construirInforme(datos: DatosInforme, ordenTipos: readonly strin
     : "";
 
   const cuerpo = r.total === 0 ? vacio : [
+    consolidado,
     tablaDesglose("Por tipo de solicitud", r.porTipo, "Tipo"),
     tablaDesglose("Por área solicitante", r.porArea, "Área"),
     incluirPorDisenador ? tablaDesglose("Por diseñador", r.porDisenador, "Diseñador") : "",
@@ -345,7 +499,7 @@ export function construirInforme(datos: DatosInforme, ordenTipos: readonly strin
 </head>
 <body>
 <div style="max-width:1100px;margin:0 auto;padding:14px;">
-${cabecera}${consolidado}${cuerpo}${pie}
+${cabecera}${seccionIndicadores(solicitudes, ordenTipos, incluirPorDisenador)}${cuerpo}${pie}
 </div>
 </body>
 </html>`;
