@@ -64,7 +64,22 @@ que esto sea explícito.
 | `social-media.spec.ts` | Calendario de Redes Sociales, carpetas y permisos de solo lectura. |
 | `flujo.spec.ts` | Navegación del tablero y preselecciones por perfil. |
 | `referencias-upload.spec.ts` | Adjuntar un Word pesado como referencia. |
+| `indicadores.spec.ts` | Indicadores de Diseño (cifras del mes, filtros y tablas), área escrita a mano, tipo E-CARDS, sugerencia de correos, entregas de la CM y el enlace del correo. **No necesita contraseña**: monta un tablero conocido en el navegador (ver abajo). |
 | `chat-vision*.spec.ts` | IA Andromeda (la versión `-live` solo con `E2E_LIVE=1`). |
+
+## Pruebas sin contraseña, con cifras exactas
+
+`helpers/tablero-falso.ts` corta la conexión con Firestore y deja puesta la
+copia local que la app ya sabe leer (`gp_requests_backup`) junto con una sesión
+ya iniciada. Así la app arranca con UN tablero conocido y ninguna otra
+solicitud.
+
+Es lo que permite afirmar "6 piezas" o "cumplimiento 50 %" en vez de "más de
+cero", que es lo único exigible contra un tablero real que cambia cada día. Y
+de paso no hace falta contraseña ni se escribe nada en ningún sitio.
+
+Si se tocan esas cifras, hay que actualizar los totales comentados en la
+cabecera del fichero: están calculados a mano a propósito.
 
 ## Si algo falla
 
@@ -74,3 +89,13 @@ que esto sea explícito.
 2. **Fallos solo al correr todo junto** → suele ser tiempo, no un fallo real.
    Prueba el archivo suelto antes de dar por rota la app.
 3. **Sesiones caducadas** → borra `e2e/.auth/` y vuelve a correr.
+4. **Todo se queda en la pantalla de acceso** → o faltan las contraseñas
+   (mira los avisos "Sin sesión de …" al arrancar), o el puerto 3000 lo tiene
+   otra aplicación. Eso segundo pasa en las máquinas donde conviven varios
+   proyectos: Playwright reutiliza el servidor que encuentre, y las pruebas
+   acaban mirando OTRA app. Se arregla apuntando al puerto propio:
+
+   ```bash
+   npx next dev -p 3111
+   E2E_BASE_URL=http://localhost:3111 npx playwright test
+   ```
