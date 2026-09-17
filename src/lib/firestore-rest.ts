@@ -149,3 +149,46 @@ export async function nextRequestId(): Promise<string> {
   }
   return `GP${max + 1}`;
 }
+
+/**
+ * Borra un documento y confirma que se fue.
+ *
+ * POR QUÉ DESDE EL SERVIDOR: el borrado vivía en el navegador, y la conexión
+ * de Firestore desde el navegador es justo la que se cuelga en algunas redes.
+ * Se encontraron 34 solicitudes que la gente había mandado eliminar y seguían
+ * en el tablero —una de ellas intentada dos veces el mismo día—, contando
+ * además en los indicadores. Desde aquí no depende de la red de nadie.
+ *
+ * Devuelve `true` solo si al comprobarlo ya no está: un 200 del borrado no es
+ * prueba suficiente cuando el problema que se quiere cerrar es precisamente
+ * "dijo que sí y no pasó nada".
+ */
+export async function deleteDocConfirmado(collection: string, docId: string): Promise<boolean> {
+  const url = new URL(`${FS_BASE}/${collection}/${encodeURIComponent(docId)}`);
+  url.searchParams.set("key", API_KEY);
+  const res = await fetch(url, {
+    method: "DELETE",
+    signal: AbortSignal.timeout(15000),
+    cache: "no-store",
+  });
+  // 404 = ya no estaba, que para el caso es lo mismo que borrado.
+  if (!res.ok && res.status !== 404) {
+    throw new Error(`Firestore delete ${res.status}: ${(await res.text()).slice(0, 200)}`);
+  }
+  const quedo = await getDoc(collection, docId, ["id"]);
+  return quedo === null;
+}
+
+/** Ids de los documentos de una subcolección (para vaciarla antes de borrar). */
+export async function listSubDocIds(ruta: string): Promise<string[]> {
+  const url = new URL(`${FS_BASE}/${ruta}`);
+  url.searchParams.set("key", API_KEY);
+  url.searchParams.set("pageSize", "300");
+  url.searchParams.append("mask.fieldPaths", "__name__");
+  const res = await fetch(url, { signal: AbortSignal.timeout(15000), cache: "no-store" });
+  if (!res.ok) return [];
+  const data = await res.json();
+  return ((data.documents as { name: string }[] | undefined) || [])
+    .map(d => d.name.split("/").pop() || "")
+    .filter(Boolean);
+}

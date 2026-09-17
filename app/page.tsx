@@ -2149,8 +2149,8 @@ export default function GanaPlayMainApp() {
       throw new Error(verifyData?.error || "No autorizado para eliminar.");
     }
 
-    // 2. Borrar archivos de Storage (best-effort: si Storage falla, igual seguimos
-    //    con la limpieza de Firestore para no dejar el doc colgado).
+    // 2. Archivos de Storage: esto sí lo hace el navegador, que es quien tiene
+    //    el SDK de Storage. Si falla, no se bloquea: la solicitud ya no está.
     try {
       const folderRef = ref(storage, `creatives/${req.id}`);
       const listing = await listAll(folderRef);
@@ -2159,18 +2159,12 @@ export default function GanaPlayMainApp() {
       console.warn("[permanentDelete] Storage cleanup parcial:", err);
     }
 
-    // 3. Borrar subcolección de mensajes
-    try {
-      const msgsSnap = await getDocs(collection(db, "requests", req.id, "messages"));
-      await Promise.all(msgsSnap.docs.map(d => deleteDoc(d.ref).catch(() => undefined)));
-    } catch (err) {
-      console.warn("[permanentDelete] Limpieza de mensajes parcial:", err);
-    }
+    // 3. El documento y sus comentarios ya los borró el servidor en el paso 1.
+    //    Se hacía aquí, y cuando la conexión del navegador con Firestore se
+    //    colgaba —cosa que pasa en algunas redes— el aviso decía "eliminada" y
+    //    la solicitud seguía viva, contando en los indicadores.
 
-    // 4. Borrar documento principal
-    await deleteDoc(doc(db, "requests", req.id));
-
-    // 5. Borrar notificaciones que referencien esta solicitud (best-effort)
+    // 4. Borrar notificaciones que referencien esta solicitud (best-effort)
     try {
       const notifs = firestoreNotifs.filter(n => n.requestId === req.id);
       await Promise.all(notifs.map(n => deleteDoc(doc(db, "notifications", n.id)).catch(() => undefined)));

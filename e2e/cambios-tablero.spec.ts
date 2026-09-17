@@ -12,7 +12,7 @@
  */
 import { test, expect, Page } from "@playwright/test";
 import { ficheroSesion, sesionDisponible, passwordDe } from "./helpers/sesion";
-import { borrarSolicitud, MARCADOR } from "./helpers/datos";
+import { borrarSolicitud, leerSolicitud, MARCADOR } from "./helpers/datos";
 import { montarTablero, SOLICITUDES } from "./helpers/tablero-falso";
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -126,6 +126,14 @@ test.describe("Ciclo de una solicitud, como diseñador", () => {
     await dialogo.locator('input[type="password"]').fill(passwordDe("designer"));
     await dialogo.getByRole("button", { name: /^Eliminar permanentemente$/i }).click();
     await expect(page.getByText(/eliminada permanentemente/i)).toBeVisible({ timeout: 60_000 });
+
+    // Y comprobarlo DE VERDAD en la base, no por el aviso de pantalla. Ese
+    // agujero dejó 34 solicitudes "eliminadas" vivas en el tablero, contando
+    // en los indicadores: el aviso salía igual y nadie miraba el documento.
+    await expect.poll(async () => await leerSolicitud(creada), {
+      message: "la solicitud debe desaparecer de Firestore, no solo de la pantalla",
+      timeout: 30_000,
+    }).toBeNull();
     creada = "";   // ya no hay que limpiarla
   });
 });

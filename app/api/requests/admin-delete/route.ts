@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { checkRateLimit, getClientIp } from "@/lib/rate-limit";
 import { emailDeIdToken, findByEmail } from "@/lib/team";
+import { deleteDocConfirmado, listSubDocIds } from "@/lib/firestore-rest";
 
 /**
  * Verificación server-side para eliminación permanente de solicitudes.
@@ -18,9 +19,13 @@ import { emailDeIdToken, findByEmail } from "@/lib/team";
  *     - Escribe entrada de audit_log en Firestore (SIN contenido sensible:
  *       solo id, acción, usuario, timestamp).
  *     - Devuelve { ok: true } al cliente.
- *  4. Cliente, tras recibir ok, ejecuta la limpieza real:
- *     - Borra el documento /requests/{id}
- *     - Borra archivos de /creatives/{id}/* en Storage
+ *  4. EL SERVIDOR borra la solicitud y comprueba que ya no está. Antes esto
+ *     lo hacía el navegador, y la conexión de Firestore desde el navegador es
+ *     justo la que se cuelga en algunas redes: se encontraron 34 solicitudes
+ *     mandadas a eliminar que seguían en el tablero, contando en los
+ *     indicadores. Una de ellas se había intentado dos veces el mismo día.
+ *  5. El cliente, con el ok, limpia los archivos de /creatives/{id}/* en
+ *     Storage (eso sí necesita su SDK) y refresca la pantalla.
  *
  * El audit log NO almacena el contenido de la solicitud ni los artes
  * (requisito de la tarea). Solo deja rastro de quién y cuándo.
@@ -145,14 +150,41 @@ export async function POST(req: Request) {
       );
     }
 
+    const quien = `${(by && typeof by === "string" ? by : perfil)} (${perfil})`;
+
+    // Primero los comentarios: un documento con subcolección deja "documentos
+    // huérfanos" que siguen apareciendo en algunas consultas.
+    try {
+      const mensajes = await listSubDocIds(`requests/${encodeURIComponent(requestId)}/messages`);
+      for (const m of mensajes) {
+        await deleteDocConfirmado(`requests/${encodeURIComponent(requestId)}/messages`, m).catch(() => {});
+      }
+    } catch { /* no bloquea el borrado principal */ }
+
+    let borrada = false;
+    try {
+      borrada = await deleteDocConfirmado("requests", requestId);
+    } catch (e) {
+      console.error("[admin-delete] fallo al borrar:", e);
+    }
+
+    if (!borrada) {
+      return NextResponse.json(
+        { ok: false, error: "No se pudo borrar la solicitud. Vuelve a intentarlo en un momento." },
+        { status: 502 },
+      );
+    }
+
+    // El registro se escribe DESPUÉS de comprobar que se fue: antes quedaba
+    // rastro de borrados que en realidad no habían ocurrido.
     await writeAuditLog({
       action: "permanent_delete",
       requestId,
-      by: `${(by && typeof by === "string" ? by : perfil)} (${perfil})`,
+      by: quien,
       at: new Date().toISOString(),
     });
 
-    return NextResponse.json({ ok: true });
+    return NextResponse.json({ ok: true, deleted: true });
   } catch (err) {
     const msg = err instanceof Error ? err.message : "Error interno.";
     return NextResponse.json({ ok: false, error: msg }, { status: 500 });
