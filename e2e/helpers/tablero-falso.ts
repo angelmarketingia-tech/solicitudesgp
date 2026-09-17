@@ -29,7 +29,11 @@ export type SolicitudFalsa = {
   deliveryDate: string;
   /** Fecha en que se marcó Publicado; se convierte en su entrada de historial. */
   publicadaEl?: string;
+  /** Archivos subidos. */
   piezas: number;
+  /** Conteo escrito a mano por el diseñador, que manda sobre los archivos. */
+  piezasDeclaradas?: number;
+  redimensionesDeclaradas?: number;
 };
 
 /**
@@ -107,6 +111,8 @@ function aFormatoApp(s: SolicitudFalsa) {
     creatives: Array.from({ length: s.piezas }, (_, i) => ({
       id: `${s.id}-${i}`, url: PIXEL, type: `pieza-${i + 1}.png`,
     })),
+    piezasDeclaradas: s.piezasDeclaradas,
+    redimensionesDeclaradas: s.redimensionesDeclaradas,
     comments: 0,
     history: s.publicadaEl
       ? [{ action: 'Estado cambiado a "Publicado"', by: s.assignedTo || "", at: `${s.publicadaEl}T12:00:00.000Z` }]
@@ -129,14 +135,30 @@ export async function aislarDeFirestore(page: Page) {
  */
 export async function montarTablero(
   page: Page,
-  opciones: { rol?: string; nombre?: string; correo?: string; sesion?: boolean; solicitudes?: SolicitudFalsa[] } = {},
+  opciones: {
+    rol?: string; nombre?: string; correo?: string; sesion?: boolean;
+    solicitudes?: SolicitudFalsa[];
+    /**
+     * Guarda la copia local SIN los artes, como hace la app de verdad (no caben
+     * en localStorage), y sirve el tablero completo por `/api/board`. Es la
+     * situación de quien abre una solicitud desde un enlace: primero ve la copia
+     * ligera y los artes tienen que llegar después.
+     */
+    artesSoloDelServidor?: boolean;
+  } = {},
 ) {
   const {
     rol = "designer", nombre = "Verónica", correo = "veronica.marquez@ganaplay.com",
-    sesion = true, solicitudes = SOLICITUDES,
+    sesion = true, solicitudes = SOLICITUDES, artesSoloDelServidor = false,
   } = opciones;
 
   await aislarDeFirestore(page);
+  if (artesSoloDelServidor) {
+    await page.route("**/api/board**", r => r.fulfill({
+      status: 200, contentType: "application/json",
+      body: JSON.stringify({ requests: solicitudes.map(aFormatoApp) }),
+    }));
+  }
   await page.addInitScript(({ tablero, rol, nombre, correo, sesion }) => {
     try {
       localStorage.setItem("gp_requests_backup", JSON.stringify(tablero));
@@ -149,5 +171,8 @@ export async function montarTablero(
         localStorage.removeItem("gp_userName");
       }
     } catch { /* sin almacenamiento, la prueba lo detectará igual */ }
-  }, { tablero: solicitudes.map(aFormatoApp), rol, nombre, correo, sesion });
+  }, {
+    tablero: solicitudes.map(aFormatoApp).map(r => artesSoloDelServidor ? { ...r, creatives: [] } : r),
+    rol, nombre, correo, sesion,
+  });
 }

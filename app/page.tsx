@@ -24,6 +24,7 @@ import { compressImageToDataUrl, validateImage } from '@/lib/image';
 import { uploadToStorage, storageErrorMessage } from '@/lib/storage-upload';
 import { publicLink } from '@/lib/public-url';
 import { filtrarPorFechas, imprimirInforme, resumirSolicitudes } from '@/lib/report-export';
+import { piezasDe, principalesDe, redimensionesDe, tieneCuentaDeclarada } from '@/lib/analytics';
 import {
   mediaKindOf, maxBytesFor, formatMB,
   DELIVERABLE_EXTS, DELIVERABLE_ACCEPT, MAX_FILE_BYTES, MAX_VIDEO_BYTES,
@@ -306,6 +307,17 @@ type RequestType = {
   referenceImages?: string[];     // varias imágenes de referencia (data URLs)
   referenceFiles?: ReferenceFile[]; // documentos de referencia (PDF/Word) en Storage
   assignedTo?: string;
+  /** Quién le dio Publicado y cuándo. A esa persona se le cuenta el trabajo. */
+  publishedBy?: string;
+  publishedAt?: string;
+  /**
+   * Cuenta declarada por el diseñador: cuántos artes nuevos y cuántas
+   * redimensiones salieron de esta solicitud. De un solo pedido pueden salir
+   * muchas piezas sin que se suba cada archivo, así que esta cuenta es la que
+   * manda en el informe de fin de mes.
+   */
+  piezasDeclaradas?: number;
+  redimensionesDeclaradas?: number;
   creatives: Creative[];
   comments?: number;
   // Comentarios/recomendaciones: viven en el propio documento (array), no en
@@ -535,6 +547,12 @@ export default function GanaPlayMainApp() {
   // Contabilidad: alcance (equipo vs propio) y filtro por tipo de solicitud.
   const [statsScope, setStatsScope] = useState<'Equipo' | 'Mías'>('Equipo');
   const [kindFilter, setKindFilter] = useState<RequestKind | 'Todos'>('Todos');
+  // Filtros del Historial: buscar por más que el título, que era lo único.
+  const [areaFilter, setAreaFilter] = useState('Todas');
+  const [designerFilter, setDesignerFilter] = useState('Todos');
+  const [priorityFilter, setPriorityFilter] = useState<RequestPriority | 'Todas'>('Todas');
+  const [histDesde, setHistDesde] = useState('');
+  const [histHasta, setHistHasta] = useState('');
   // Periodo del informe. Vacío = todo el histórico. Acota TAMBIÉN lo que se ve
   // en pantalla, para que el PDF no pueda decir algo distinto de la pantalla
   // desde la que se pidió.
@@ -777,6 +795,68 @@ export default function GanaPlayMainApp() {
   useEffect(() => {
     if (reqChatRef.current) reqChatRef.current.scrollTop = reqChatRef.current.scrollHeight;
   }, [reqMessages]);
+
+  /**
+   * Mantiene al día lo que se ve de la solicitud abierta: artes, referencias,
+   * estado y encargado.
+   *
+   * POR QUÉ HACE FALTA: la copia local del tablero se guarda SIN adjuntos (no
+   * caben en localStorage). Quien abría una solicitud desde un enlace la veía
+   * SIN LOS ARTES, y así se quedaba aunque el servidor ya hubiera respondido,
+   * porque la ficha abierta era un estado aparte que nadie refrescaba.
+   *
+   * La unión por identidad de pieza es a propósito: una recién subida todavía
+   * no está en el servidor, y sin la unión desaparecería un instante.
+   */
+  // Al cambiar de solicitud abierta, el formulario del conteo muestra lo suyo.
+  useEffect(() => {
+    const r = selectedReqId ? requests.find(x => x.id === selectedReqId) : null;
+    setConteoPiezas(r?.piezasDeclaradas === undefined || r?.piezasDeclaradas === null ? '' : String(r.piezasDeclaradas));
+    setConteoRedim(r?.redimensionesDeclaradas === undefined || r?.redimensionesDeclaradas === null ? '' : String(r.redimensionesDeclaradas));
+    // Solo cuando cambia la solicitud: si dependiera de `requests`, borraría lo
+    // que el diseñador está escribiendo en cuanto llegue cualquier cambio.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedReqId]);
+
+  useEffect(() => {
+    if (!modalOpen || !selectedReqId) return;
+    const live = requests.find(r => r.id === selectedReqId);
+    if (!live) return;
+    setSelectedReq(prev => {
+      if (!prev || prev.id !== live.id) return prev;
+      const porClave = new Map<string, Creative>();
+      for (const c of live.creatives || []) porClave.set(creativeKey(c), c);
+      for (const c of prev.creatives || []) if (!porClave.has(creativeKey(c))) porClave.set(creativeKey(c), c);
+      const creatives = [...porClave.values()];
+      const refImgs = live.referenceImages?.length ? live.referenceImages : (prev.referenceImages || []);
+      const refFiles = live.referenceFiles?.length ? live.referenceFiles : (prev.referenceFiles || []);
+      const igual =
+        creatives.length === (prev.creatives || []).length &&
+        refImgs.length === (prev.referenceImages || []).length &&
+        refFiles.length === (prev.referenceFiles || []).length &&
+        live.status === prev.status &&
+        (live.assignedTo || '') === (prev.assignedTo || '') &&
+        (live.piezasDeclaradas ?? null) === (prev.piezasDeclaradas ?? null) &&
+        (live.redimensionesDeclaradas ?? null) === (prev.redimensionesDeclaradas ?? null);
+      if (igual) return prev;   // nada que refrescar: no se re-renderiza
+      return {
+        ...prev,
+        creatives,
+        referenceImages: refImgs,
+        referenceFiles: refFiles,
+        referenceImage: prev.referenceImage || live.referenceImage,
+        status: live.status,
+        assignedTo: live.assignedTo,
+        publishedBy: live.publishedBy,
+        publishedAt: live.publishedAt,
+        // Directo, sin "??": el servidor manda también cuando el valor es
+        // vacío. Con "??" borrar el conteo no se veía, porque el número viejo
+        // de la copia en pantalla volvía a ganar.
+        piezasDeclaradas: live.piezasDeclaradas,
+        redimensionesDeclaradas: live.redimensionesDeclaradas,
+      };
+    });
+  }, [modalOpen, selectedReqId, requests]);
 
   // ─── Preselección de datos del solicitante según el perfil ───
   // Cada perfil precarga su área, nombre y correo para reducir clics.
@@ -1286,14 +1366,50 @@ export default function GanaPlayMainApp() {
     }
   };
 
+  /**
+   * Cambio de estado del diseñador.
+   *
+   * DOS REGLAS DE ATRIBUCIÓN, que antes había que recordar a mano:
+   *
+   *  · Ponerla EN PROCESO es tomarla. Se asigna sola a quien la mueve, sin
+   *    tener que pulsar además "Asignarme".
+   *  · PUBLICARLA es quien la termina. Si uno la empezó y otro la publica, el
+   *    trabajo se le cuenta a quien publicó: la solicitud pasa a su nombre y se
+   *    guarda aparte quién y cuándo, que es lo que lee el informe.
+   */
   const handleChangeStatus = async (e: ChangeEvent<HTMLSelectElement>) => {
     if (!selectedReq || role !== 'designer') return;
     const newStatus = e.target.value as RequestStatus;
-    const entry: HistoryEntry = { action: `Estado cambiado a "${newStatus}"`, by: userName, at: new Date().toISOString() };
-    const newHistory = [...(selectedReq.history || []), entry];
+    const ahora = new Date().toISOString();
+    const historial: HistoryEntry[] = [
+      { action: `Estado cambiado a "${newStatus}"`, by: userName, at: ahora },
+    ];
+    const cambios: Record<string, unknown> = { status: newStatus, updatedAt: serverTimestamp() };
+    const local: Partial<RequestType> = { status: newStatus };
+
+    const tomaLaSolicitud = newStatus === 'En Proceso' || newStatus === 'Publicado';
+    if (tomaLaSolicitud && selectedReq.assignedTo !== userName) {
+      cambios.assignedTo = userName;
+      local.assignedTo = userName;
+      historial.push({
+        action: selectedReq.assignedTo
+          ? `Reasignada a ${userName} al pasarla a "${newStatus}"`
+          : `Asignada a ${userName} al pasarla a "${newStatus}"`,
+        by: userName, at: ahora,
+      });
+    }
+    if (newStatus === 'Publicado') {
+      cambios.publishedBy = userName;
+      cambios.publishedAt = ahora;
+      local.publishedBy = userName;
+      local.publishedAt = ahora;
+    }
+
+    const newHistory = [...(selectedReq.history || []), ...historial];
+    cambios.history = newHistory;
     try {
-      await updateDoc(doc(db, "requests", selectedReq.id), { status: newStatus, history: newHistory, updatedAt: serverTimestamp() });
-      setSelectedReq({ ...selectedReq, status: newStatus, history: newHistory });
+      await updateDoc(doc(db, "requests", selectedReq.id), cambios);
+      setSelectedReq({ ...selectedReq, ...local, history: newHistory });
       await createNotification('status_change', '🔄 Cambio de estado', `${selectedReq.id} "${selectedReq.title}" → ${newStatus} (por ${userName})`, 'admin', selectedReq.id);
 
       // Cuando el diseñador marca la solicitud como Publicado (cierre final),
@@ -1315,17 +1431,87 @@ export default function GanaPlayMainApp() {
     }
   };
 
-  const handleAssignToMe = async (req: RequestType) => {
-    if (role !== 'designer') return;
-    const entry: HistoryEntry = { action: `Asignada a ${userName}`, by: userName, at: new Date().toISOString() };
+  /**
+   * Pone (o quita) el encargado de una solicitud.
+   *
+   * Sirve para las tres cosas que hacían falta: tomarla uno mismo, PASÁRSELA a
+   * otro diseñador —antes no había forma y había que pedirlo por chat— y
+   * dejarla libre otra vez.
+   */
+  const asignarSolicitud = async (req: RequestType, aQuien: string) => {
+    if (!puedeAsignar) return;
+    const destino = aQuien.trim();
+    if ((req.assignedTo || '') === destino) return;
+    const entry: HistoryEntry = {
+      action: destino
+        ? (req.assignedTo ? `Reasignada de ${req.assignedTo} a ${destino}` : `Asignada a ${destino}`)
+        : `Sin encargado (antes ${req.assignedTo})`,
+      by: userName,
+      at: new Date().toISOString(),
+    };
     const newHistory = [...(req.history || []), entry];
     try {
-      await updateDoc(doc(db, "requests", req.id), { assignedTo: userName, history: newHistory, updatedAt: serverTimestamp() });
-      if (selectedReq?.id === req.id) setSelectedReq({ ...selectedReq, assignedTo: userName, history: newHistory });
-      addToast(`Te asignaste "${req.title}".`, 'success');
-      await createNotification('assignment', '👤 Solicitud asignada', `${req.id} "${req.title}" asignado a ${userName}`, 'admin', req.id);
+      await updateDoc(doc(db, "requests", req.id), { assignedTo: destino, history: newHistory, updatedAt: serverTimestamp() });
+      setSelectedReq(prev => (prev && prev.id === req.id) ? { ...prev, assignedTo: destino, history: newHistory } : prev);
+      addToast(destino === userName ? `Te asignaste "${req.title}".`
+        : destino ? `"${req.title}" es ahora de ${destino}.`
+        : `"${req.title}" quedó sin encargado.`, 'success');
+      await createNotification('assignment', '👤 Solicitud asignada',
+        destino ? `${req.id} "${req.title}" asignado a ${destino} (por ${userName})`
+                : `${req.id} "${req.title}" quedó sin encargado (por ${userName})`,
+        'admin', req.id);
     } catch (err: unknown) {
       addToast("Error al asignar: " + (err instanceof Error ? err.message : ""), 'error');
+    }
+  };
+
+  const handleAssignToMe = (req: RequestType) => asignarSolicitud(req, userName);
+
+  /**
+   * Guarda cuántos artes y cuántas redimensiones salieron de la solicitud.
+   *
+   * POR QUÉ SE ESCRIBE A MANO: de un solo pedido pueden salir muchas piezas
+   * —una parrilla de la jornada, las redimensiones de todo un mes— y nadie sube
+   * cada archivo por separado. Sin este número, el informe de fin de mes contaba
+   * una pieza donde hubo veinte. Vacío = que lo deduzca de los archivos subidos,
+   * como antes.
+   */
+  const guardarConteo = async () => {
+    if (!selectedReq || role !== 'designer') return;
+    const aNumero = (t: string): number | null => {
+      const limpio = t.trim();
+      if (!limpio) return null;
+      const n = Number(limpio);
+      return Number.isFinite(n) && n >= 0 ? Math.floor(n) : NaN;
+    };
+    const piezas = aNumero(conteoPiezas);
+    const redim = aNumero(conteoRedim);
+    if (Number.isNaN(piezas) || Number.isNaN(redim)) {
+      addToast('Escribe números enteros (o déjalo vacío).', 'error');
+      return;
+    }
+    setConteoGuardando(true);
+    try {
+      const entry: HistoryEntry = {
+        action: `Conteo declarado: ${piezas ?? '—'} arte(s), ${redim ?? '—'} redimensión(es)`,
+        by: userName, at: new Date().toISOString(),
+      };
+      const newHistory = [...(selectedReq.history || []), entry];
+      await updateDoc(doc(db, "requests", selectedReq.id), {
+        // null borra el campo en Firestore: así "vacío" vuelve a contar archivos.
+        piezasDeclaradas: piezas,
+        redimensionesDeclaradas: redim,
+        history: newHistory,
+        updatedAt: serverTimestamp(),
+      });
+      setSelectedReq(prev => prev && prev.id === selectedReq.id
+        ? { ...prev, piezasDeclaradas: piezas ?? undefined, redimensionesDeclaradas: redim ?? undefined, history: newHistory }
+        : prev);
+      addToast('Conteo guardado. Ya cuenta en el informe.', 'success');
+    } catch (err: unknown) {
+      addToast('No se pudo guardar el conteo: ' + (err instanceof Error ? err.message : ''), 'error');
+    } finally {
+      setConteoGuardando(false);
     }
   };
 
@@ -1593,13 +1779,20 @@ export default function GanaPlayMainApp() {
       };
       const newHistory = [...baseHistory, entry];
 
+      // Subir un entregable también es tomar la solicitud: quien sube el arte
+      // es quien lo está haciendo, y así no hace falta pulsar "Asignarme".
+      const tomarla = reqSnapshot.assignedTo !== userName;
       await updateDoc(doc(db, "requests", reqSnapshot.id), {
         status: "En Proceso",
         creatives: newCreativesList,
         history: newHistory,
         updatedAt: serverTimestamp(),
+        ...(tomarla ? { assignedTo: userName } : {}),
       });
-      const updatedReq: RequestType = { ...reqSnapshot, status: "En Proceso", creatives: newCreativesList, history: newHistory };
+      const updatedReq: RequestType = {
+        ...reqSnapshot, status: "En Proceso", creatives: newCreativesList, history: newHistory,
+        ...(tomarla ? { assignedTo: userName } : {}),
+      };
       setSelectedReq(prev => (prev && prev.id === reqSnapshot.id) ? updatedReq : prev);
 
       if (usedFallback) {
@@ -1653,6 +1846,10 @@ export default function GanaPlayMainApp() {
    * vez de un simple booleano: si no, el resaltado parpadea.
    */
   const [arrastrandoEntrega, setArrastrandoEntrega] = useState(false);
+  // Conteo declarado de la solicitud abierta (texto mientras se escribe).
+  const [conteoPiezas, setConteoPiezas] = useState('');
+  const [conteoRedim, setConteoRedim] = useState('');
+  const [conteoGuardando, setConteoGuardando] = useState(false);
   const contadorArrastre = useRef(0);
 
   const alSoltarEntregables = async (e: React.DragEvent) => {
@@ -1981,8 +2178,8 @@ export default function GanaPlayMainApp() {
 
   const handleConfirmPermanentDelete = async () => {
     if (!deleteModalOpen) return;
-    if (role !== "admin") {
-      addToast("Solo el Trafficker puede eliminar permanentemente.", 'error');
+    if (!puedeEliminar) {
+      addToast("Tu perfil no puede eliminar solicitudes.", 'error');
       return;
     }
     const req = deleteModalOpen;
@@ -1990,7 +2187,7 @@ export default function GanaPlayMainApp() {
     // junto con la pass desde el autocompletar o copy/paste, lo que causaba 403.
     const cleanPass = deleteAdminPass.trim();
     if (!cleanPass) {
-      addToast("Ingresa tu contraseña de Trafficker.", 'error');
+      addToast("Escribe tu contraseña para confirmar.", 'error');
       return;
     }
     setDeleteLoading(true);
@@ -2014,6 +2211,16 @@ export default function GanaPlayMainApp() {
 
   // ═══════════════ DECLINAR SOLICITUD (equipo interno autorizado) ═══════════════
   const canDecline = gestionaSolicitudes || role === "designer";
+  /** Reasignar es cosa de Diseño y del Trafficker. */
+  const puedeAsignar = role === 'designer' || role === 'admin';
+  /**
+   * Eliminar para siempre: Trafficker y Diseño.
+   *
+   * Diseño entró aquí porque son quienes detectan los duplicados y las pruebas,
+   * y declinar no los quita de en medio. Se sigue pidiendo la contraseña y
+   * queda registro de quién borró: es destructivo y no se deshace.
+   */
+  const puedeEliminar = role === 'admin' || role === 'designer';
 
   const handleConfirmDecline = async () => {
     if (!declineModalOpen) return;
@@ -3462,28 +3669,77 @@ export default function GanaPlayMainApp() {
 
         {/* ─── VISTA: HISTORIAL ─── */}
         {activeTab === 'Historial' && (() => {
+          // La búsqueda mira también quién la pidió y quién la hace: se busca
+          // tanto por "Verónica" o "Directiva" como por el número o el título.
+          const q = searchQuery.trim().toLowerCase();
           const filtered = visibles.filter(r => {
-            const matchSearch = searchQuery === '' || r.id.toLowerCase().includes(searchQuery.toLowerCase()) || r.title.toLowerCase().includes(searchQuery.toLowerCase());
+            const matchSearch = q === '' || [r.id, r.title, r.requesterName, r.assignedTo, r.area]
+              .some(campo => (campo || '').toLowerCase().includes(q));
             const matchStatus = statusFilter === 'Todos' || r.status === statusFilter;
             const matchKind = kindFilter === 'Todos' || r.requestKind === kindFilter;
-            return matchSearch && matchStatus && matchKind;
+            const matchArea = areaFilter === 'Todas' || ((r.area || '').trim() || 'Sin área') === areaFilter;
+            const matchDis = designerFilter === 'Todos' || ((r.assignedTo || '').trim() || 'Sin asignar') === designerFilter;
+            const matchPrio = priorityFilter === 'Todas' || (r.priority ?? 'Medio') === priorityFilter;
+            // Por fecha de creación, igual que el informe.
+            const f = (r.requestDate || r.deliveryDate || '').slice(0, 10);
+            const matchDesde = !histDesde || (f && f >= histDesde);
+            const matchHasta = !histHasta || (f && f <= histHasta);
+            return matchSearch && matchStatus && matchKind && matchArea && matchDis && matchPrio && matchDesde && matchHasta;
           });
+          const areasDelTablero = [...new Set(visibles.map(r => (r.area || '').trim() || 'Sin área'))].sort((a, b) => a.localeCompare(b));
+          const hayFiltros = Boolean(q) || statusFilter !== 'Todos' || kindFilter !== 'Todos'
+            || areaFilter !== 'Todas' || designerFilter !== 'Todos' || priorityFilter !== 'Todas'
+            || histDesde || histHasta;
+          const limpiarFiltros = () => {
+            setSearchQuery(''); setStatusFilter('Todos'); setKindFilter('Todos');
+            setAreaFilter('Todas'); setDesignerFilter('Todos'); setPriorityFilter('Todas');
+            setHistDesde(''); setHistHasta('');
+          };
           return (
             <div>
               <div style={{ display: 'flex', gap: '12px', marginBottom: '20px', flexWrap: 'wrap', alignItems: 'center' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flex: 1, minWidth: '200px', background: 'var(--gp-white)', border: '1px solid var(--border-color)', borderRadius: '10px', padding: '8px 12px' }}>
                   <Search size={16} color="var(--text-muted)" />
-                  <input type="text" placeholder="Buscar por ID o título..." value={searchQuery} onChange={e => setSearchQuery(e.target.value)}
+                  <input type="text" placeholder="Buscar por ID, título, solicitante, diseñador o área…" value={searchQuery} onChange={e => setSearchQuery(e.target.value)}
                     style={{ border: 'none', background: 'transparent', outline: 'none', flex: 1, fontSize: '14px', padding: 0, boxShadow: 'none' }} />
                 </div>
-                <select value={statusFilter} onChange={e => setStatusFilter(e.target.value as RequestStatus | "Todos")} style={{ width: 'auto', minWidth: '180px' }}>
+                <select value={statusFilter} onChange={e => setStatusFilter(e.target.value as RequestStatus | "Todos")} style={{ width: 'auto', minWidth: '150px' }}>
                   <option value="Todos">Todos los estados</option>
-                  {(["Publicado", "En Proceso", "Planeando", "Pendiente", "Denegado"] as RequestStatus[]).map(s => <option key={s} value={s}>{s}</option>)}
+                  {(["Publicado", "En Proceso", "Planeando", "Pendiente", "Declinada", "Denegado"] as RequestStatus[]).map(s => <option key={s} value={s}>{s}</option>)}
                 </select>
-                <select value={kindFilter} onChange={e => setKindFilter(e.target.value as RequestKind | "Todos")} style={{ width: 'auto', minWidth: '180px' }}>
+                <select value={kindFilter} onChange={e => setKindFilter(e.target.value as RequestKind | "Todos")} style={{ width: 'auto', minWidth: '160px' }}>
                   <option value="Todos">Todos los tipos</option>
                   {REQUEST_KINDS.map(k => <option key={k.id} value={k.id}>{k.emoji} {k.label} ({visibles.filter(r => r.requestKind === k.id).length})</option>)}
                 </select>
+                <select value={areaFilter} onChange={e => setAreaFilter(e.target.value)} style={{ width: 'auto', minWidth: '140px' }}>
+                  <option value="Todas">Todas las áreas</option>
+                  {areasDelTablero.map(a => <option key={a} value={a}>{a}</option>)}
+                </select>
+                <select value={designerFilter} onChange={e => setDesignerFilter(e.target.value)} style={{ width: 'auto', minWidth: '150px' }}>
+                  <option value="Todos">Todos los diseñadores</option>
+                  {DESIGNER_USERS.map(d => <option key={d} value={d}>{d}</option>)}
+                  <option value="Sin asignar">Sin asignar</option>
+                </select>
+                <select value={priorityFilter} onChange={e => setPriorityFilter(e.target.value as RequestPriority | 'Todas')} style={{ width: 'auto', minWidth: '140px' }}>
+                  <option value="Todas">Toda prioridad</option>
+                  {(["Urgente", "Alto", "Medio", "Bajo"] as RequestPriority[]).map(pr => <option key={pr} value={pr}>{pr}</option>)}
+                </select>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '6px', width: 'auto', margin: 0, fontSize: '12px', color: 'var(--text-secondary)' }}>
+                  Desde
+                  <input type="date" value={histDesde} max={histHasta || undefined} onChange={e => setHistDesde(e.target.value)}
+                    style={{ width: 'auto', fontSize: '12px', padding: '7px 9px' }} />
+                </label>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '6px', width: 'auto', margin: 0, fontSize: '12px', color: 'var(--text-secondary)' }}>
+                  Hasta
+                  <input type="date" value={histHasta} min={histDesde || undefined} onChange={e => setHistHasta(e.target.value)}
+                    style={{ width: 'auto', fontSize: '12px', padding: '7px 9px' }} />
+                </label>
+                {hayFiltros && (
+                  <button className="btn-secondary" onClick={limpiarFiltros}
+                    style={{ padding: '8px 12px', fontSize: '12px', borderRadius: '10px', cursor: 'pointer' }}>
+                    <X size={13} /> Limpiar filtros
+                  </button>
+                )}
                 <span style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>{filtered.length} resultado{filtered.length !== 1 ? 's' : ''}</span>
               </div>
               {filtered.length === 0 ? (
@@ -4341,12 +4597,33 @@ export default function GanaPlayMainApp() {
                     Prioridad: {selectedReq.priority ?? 'Medio'}
                   </span>
                 )}
-                {role === 'designer' && !selectedReq.assignedTo && (
-                  <button className="btn" onClick={() => handleAssignToMe(selectedReq)} style={{ padding: '9px 18px' }}>Asignarme esta solicitud</button>
-                )}
-                {selectedReq.assignedTo && (
+                {puedeAsignar ? (
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '7px', width: 'auto', margin: 0 }}
+                    title="Cambiar el encargado de esta solicitud">
+                    <User size={14} color="var(--accent-color)" />
+                    <select
+                      value={selectedReq.assignedTo || ''}
+                      onChange={(e) => asignarSolicitud(selectedReq, e.target.value)}
+                      style={{ width: 'auto', fontWeight: 700, background: selectedReq.assignedTo ? 'var(--accent-soft)' : 'var(--surface-1)', color: selectedReq.assignedTo ? 'var(--accent-dark)' : 'var(--text-secondary)', border: `1px solid ${selectedReq.assignedTo ? 'var(--accent-color)' : 'var(--border-color)'}` }}>
+                      <option value="">Sin encargado</option>
+                      {DESIGNER_USERS.map(d => (
+                        <option key={d} value={d}>{d === userName ? `${d} (yo)` : d}</option>
+                      ))}
+                      {/* Un encargado que ya no esté en la lista no se pierde
+                          al abrir la solicitud. */}
+                      {selectedReq.assignedTo && !DESIGNER_USERS.includes(selectedReq.assignedTo) && (
+                        <option value={selectedReq.assignedTo}>{selectedReq.assignedTo}</option>
+                      )}
+                    </select>
+                  </label>
+                ) : selectedReq.assignedTo && (
                   <span style={{ fontSize: '13px', color: 'var(--accent-color)', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '6px' }}>
                     <User size={14} /> Encargado: {selectedReq.assignedTo}
+                  </span>
+                )}
+                {selectedReq.publishedBy && selectedReq.publishedBy !== selectedReq.assignedTo && (
+                  <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>
+                    Publicada por {selectedReq.publishedBy}
                   </span>
                 )}
 
@@ -4398,8 +4675,8 @@ export default function GanaPlayMainApp() {
                   </button>
                 )}
 
-                {/* Eliminar permanentemente — SOLO Trafficker */}
-                {role === "admin" && (
+                {/* Eliminar permanentemente — Trafficker y Diseño */}
+                {puedeEliminar && (
                   <button
                     onClick={() => { setDeleteModalOpen(selectedReq); setDeleteAdminPass(""); setDeleteShowPass(false); }}
                     style={{
@@ -4408,7 +4685,7 @@ export default function GanaPlayMainApp() {
                       border: '1px solid var(--danger, #d92d20)', borderRadius: '10px',
                       cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px', width: 'auto',
                     }}
-                    title="Solo Trafficker. Elimina solicitud + artes + historial."
+                    title="Elimina la solicitud, sus artes y su historial. No se puede deshacer."
                   >
                     <Trash2 size={14} /> Eliminar permanentemente
                   </button>
@@ -4710,6 +4987,47 @@ export default function GanaPlayMainApp() {
                       {selectedReq.dimensions.map(d => (
                         <span key={d} className="badge" style={{ background: 'var(--surface-2)', color: 'var(--text-secondary)', fontSize: '10px' }}>{d}</span>
                       ))}
+                    </div>
+                  )}
+
+                  {/* Conteo del trabajo: lo que se lleva al informe mensual. */}
+                  {role === 'designer' ? (
+                    <div style={{ background: 'var(--surface-1)', border: '1px solid var(--border-color)', borderRadius: '12px', padding: '12px 14px', marginBottom: '14px' }}>
+                      <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.6px', marginBottom: '4px' }}>
+                        Piezas de esta solicitud
+                      </div>
+                      <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginBottom: '10px', lineHeight: 1.5 }}>
+                        Cuántas hiciste de verdad, aunque no las hayas subido todas. Es lo que cuenta en el informe del mes.
+                      </div>
+                      <div style={{ display: 'flex', gap: '10px', alignItems: 'flex-end', flexWrap: 'wrap' }}>
+                        <label style={{ display: 'flex', flexDirection: 'column', gap: '4px', width: 'auto', margin: 0 }}>
+                          <span style={{ fontSize: '11px', color: 'var(--text-secondary)', fontWeight: 600 }}>Artes</span>
+                          <input type="number" min={0} step={1} inputMode="numeric" value={conteoPiezas}
+                            placeholder="auto"
+                            onChange={e => setConteoPiezas(e.target.value)}
+                            style={{ width: '84px', fontSize: '13px', padding: '8px 10px' }} />
+                        </label>
+                        <label style={{ display: 'flex', flexDirection: 'column', gap: '4px', width: 'auto', margin: 0 }}>
+                          <span style={{ fontSize: '11px', color: 'var(--text-secondary)', fontWeight: 600 }}>Redimensiones</span>
+                          <input type="number" min={0} step={1} inputMode="numeric" value={conteoRedim}
+                            placeholder="auto"
+                            onChange={e => setConteoRedim(e.target.value)}
+                            style={{ width: '104px', fontSize: '13px', padding: '8px 10px' }} />
+                        </label>
+                        <button className="btn-secondary" onClick={guardarConteo} disabled={conteoGuardando}
+                          style={{ padding: '9px 14px', fontSize: '12px', borderRadius: '10px', cursor: conteoGuardando ? 'wait' : 'pointer' }}>
+                          {conteoGuardando ? 'Guardando…' : 'Guardar conteo'}
+                        </button>
+                        <span style={{ fontSize: '11px', color: 'var(--text-muted)', marginLeft: 'auto' }}>
+                          Total: <strong style={{ color: 'var(--text-primary)' }}>{piezasDe(selectedReq)}</strong>
+                          {!tieneCuentaDeclarada(selectedReq) && ' (contando archivos subidos)'}
+                        </span>
+                      </div>
+                    </div>
+                  ) : tieneCuentaDeclarada(selectedReq) && (
+                    <div style={{ fontSize: '12px', color: 'var(--text-secondary)', marginBottom: '12px' }}>
+                      Piezas declaradas: <strong>{principalesDe(selectedReq)}</strong> arte(s) y{' '}
+                      <strong>{redimensionesDe(selectedReq)}</strong> redimensión(es).
                     </div>
                   )}
 
@@ -5048,7 +5366,7 @@ export default function GanaPlayMainApp() {
       )}
 
       {/* ─── MODAL: ELIMINACIÓN PERMANENTE (solo Trafficker) ─── */}
-      {deleteModalOpen && role === "admin" && (
+      {deleteModalOpen && puedeEliminar && (
         <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', backdropFilter: 'blur(3px)', zIndex: 200, display: 'flex', justifyContent: 'center', alignItems: 'center', padding: '20px' }}>
           <div className="card" style={{ maxWidth: '520px', width: '100%', padding: '26px', borderTop: '4px solid var(--danger, #d92d20)' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '14px' }}>
@@ -5063,16 +5381,17 @@ export default function GanaPlayMainApp() {
               <li>Los archivos en Storage se borrarán.</li>
               <li>No podrá recuperarse desde la plataforma.</li>
               <li>Queda registro de auditoría (sin contenido) con tu nombre y fecha.</li>
+              <li>Si solo quieres descartarla sin perderla, usa <strong>Declinar</strong>.</li>
             </ul>
 
             <div style={{ marginBottom: '16px' }}>
-              <label className="label">Contraseña de Trafficker</label>
+              <label className="label">Tu contraseña</label>
               <div style={{ position: 'relative' }}>
                 <input
                   type={deleteShowPass ? "text" : "password"}
                   value={deleteAdminPass}
                   onChange={e => setDeleteAdminPass(e.target.value)}
-                  placeholder="Tu contraseña de admin"
+                  placeholder={role === 'admin' ? 'Tu contraseña de Trafficker' : 'Tu contraseña de Diseño'}
                   autoFocus
                   autoComplete="off"
                   spellCheck={false}

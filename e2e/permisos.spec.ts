@@ -77,7 +77,7 @@ for (const perfil of Object.keys(MATRIZ) as Perfil[]) {
       else await expect(boton).toHaveCount(0);
     });
 
-    test(`"Eliminar permanentemente" solo lo tiene el Trafficker`, async ({ page }) => {
+    test(`"Eliminar permanentemente" lo tienen el Trafficker y Diseño`, async ({ page }) => {
       test.setTimeout(120_000);
       test.skip(!sesionDisponible(perfil), `Sin sesión de ${perfil}`);
       test.skip(perfil === "comercial", "Comercial no tiene tablero de solicitudes");
@@ -86,8 +86,11 @@ for (const perfil of Object.keys(MATRIZ) as Perfil[]) {
       const fila = page.getByText(/^GP\d{3,}/).first();
       await expect(fila).toBeVisible({ timeout: 60_000 });
       await fila.click();
+      // Diseño entró aquí a petición del equipo: son quienes detectan los
+      // duplicados y las pruebas, y declinar no los quita de en medio. Se les
+      // sigue pidiendo su contraseña al confirmar.
       const borrar = page.getByRole("button", { name: /Eliminar permanentemente/i });
-      if (perfil === "admin") await expect(borrar).toBeVisible();
+      if (perfil === "admin" || perfil === "designer") await expect(borrar).toBeVisible();
       else await expect(borrar).toHaveCount(0);
     });
 

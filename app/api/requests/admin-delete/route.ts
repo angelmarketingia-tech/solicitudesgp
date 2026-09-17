@@ -5,8 +5,10 @@ import { checkRateLimit, getClientIp } from "@/lib/rate-limit";
  * Verificación server-side para eliminación permanente de solicitudes.
  *
  * Flujo:
- *  1. Cliente envía POST { requestId, adminPass }.
- *  2. Server valida adminPass contra AUTH_PASS_TRAFFICKER (rol admin).
+ *  1. Cliente envía POST { requestId, adminPass, by }.
+ *  2. Server valida la contraseña contra la del Trafficker o la de Diseño.
+ *     Diseño también borra porque son quienes detectan los duplicados y las
+ *     pruebas; se les pide SU contraseña y queda en el registro quién fue.
  *  3. Si es válido:
  *     - Escribe entrada de audit_log en Firestore (SIN contenido sensible:
  *       solo id, acción, usuario, timestamp).
@@ -32,6 +34,7 @@ export const runtime = "nodejs";
 // (el repo es público). Si falta la variable de entorno, el endpoint falla
 // cerrado (500), igual que /api/auth.
 const PASS_TRAFFICKER = process.env.AUTH_PASS_TRAFFICKER || "";
+const PASS_DESIGNER = process.env.AUTH_PASS_DESIGNER || "";
 const PROJECT_ID = process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID || "respaldogp-a2578";
 const API_KEY = process.env.NEXT_PUBLIC_FIREBASE_API_KEY || "";
 const FS_BASE = `https://firestore.googleapis.com/v1/projects/${PROJECT_ID}/databases/(default)/documents`;
@@ -94,8 +97,8 @@ export async function POST(req: Request) {
       );
     }
 
-    if (!PASS_TRAFFICKER) {
-      console.error("[admin-delete] Falta AUTH_PASS_TRAFFICKER en el entorno.");
+    if (!PASS_TRAFFICKER && !PASS_DESIGNER) {
+      console.error("[admin-delete] Faltan AUTH_PASS_TRAFFICKER y AUTH_PASS_DESIGNER en el entorno.");
       return NextResponse.json(
         { ok: false, error: "Servidor no configurado. Contacta al administrador." },
         { status: 500 }
@@ -108,12 +111,20 @@ export async function POST(req: Request) {
       return NextResponse.json({ ok: false, error: "requestId requerido." }, { status: 400 });
     }
     if (!adminPass || typeof adminPass !== "string") {
-      return NextResponse.json({ ok: false, error: "Falta contraseña de admin." }, { status: 400 });
+      return NextResponse.json({ ok: false, error: "Falta la contraseña." }, { status: 400 });
     }
 
-    if (adminPass !== PASS_TRAFFICKER) {
+    // Quién está borrando, según la contraseña que acertó. Se guarda en el
+    // registro: es lo único que queda cuando alguien pregunta "¿y esta
+    // solicitud?".
+    const perfil =
+      (PASS_TRAFFICKER && adminPass === PASS_TRAFFICKER) ? "Trafficker"
+      : (PASS_DESIGNER && adminPass === PASS_DESIGNER) ? "Diseño"
+      : "";
+
+    if (!perfil) {
       return NextResponse.json(
-        { ok: false, error: "No autorizado. Solo el Trafficker puede eliminar permanentemente." },
+        { ok: false, error: "No autorizado. Eliminar permanentemente es del Trafficker y del equipo de Diseño." },
         { status: 403 }
       );
     }
@@ -121,7 +132,7 @@ export async function POST(req: Request) {
     await writeAuditLog({
       action: "permanent_delete",
       requestId,
-      by: (by && typeof by === "string" ? by : "Trafficker"),
+      by: `${(by && typeof by === "string" ? by : perfil)} (${perfil})`,
       at: new Date().toISOString(),
     });
 

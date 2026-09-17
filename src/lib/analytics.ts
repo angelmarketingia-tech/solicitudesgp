@@ -12,10 +12,15 @@
 //
 // VOCABULARIO (el del informe que ya hace el equipo):
 //   · Solicitud          → un pedido del tablero.
-//   · Diseño principal   → la primera pieza entregada de una solicitud.
-//   · Redimensión        → cada pieza ADICIONAL de esa misma solicitud
-//                          (el mismo arte adaptado a otro formato).
-//   · Pieza              → cualquier entregable subido. piezas = principales + redimensiones.
+//   · Diseño principal   → un arte nuevo.
+//   · Redimensión        → el mismo arte adaptado a otro formato.
+//   · Pieza              → principales + redimensiones.
+//
+// DE DÓNDE SALE LA CUENTA: de lo que el diseñador declara en la solicitud
+// («hice 4 artes y 12 redimensiones»), porque de un solo pedido pueden salir
+// muchas piezas y no todas se suben una a una. Si no declaró nada, se cae a lo
+// que se pueda deducir de los archivos subidos: uno entregado = un principal,
+// y los demás archivos, redimensiones.
 
 // Este módulo es la BASE: define la forma de una solicitud y el filtro por
 // fechas. `report-export` (el PDF) importa de aquí, nunca al revés — así no hay
@@ -74,6 +79,16 @@ export function filtrarPorFechas<T extends SolicitudInforme>(
 export type SolicitudAnalitica = SolicitudInforme & {
   creatives?: unknown[];
   history?: { action?: string; at?: string }[];
+  /** Fecha (ISO) en que se marcó Publicado. */
+  publishedAt?: string;
+  /** Quién le dio Publicado: a esa persona se le cuenta el trabajo. */
+  publishedBy?: string;
+  /**
+   * Cuenta declarada por el diseñador. Una solicitud puede dar muchos artes y
+   * no todos se suben uno a uno, así que la cuenta real la pone quien la hizo.
+   */
+  piezasDeclaradas?: number;
+  redimensionesDeclaradas?: number;
 };
 
 // ─── Paleta de las gráficas ─────────────────────────────────────────────────
@@ -105,9 +120,62 @@ export function colorDeCategoria(clave: string, universo: readonly string[]): st
 
 // ─── Lecturas de una solicitud ──────────────────────────────────────────────
 
-/** Piezas entregadas. */
-export function piezasDe(r: SolicitudAnalitica): number {
+/**
+ * Un número no negativo, o null si no hay nada declarado.
+ *
+ * OJO con el vacío: `Number(null)` y `Number("")` valen 0, así que una cuenta
+ * BORRADA se leía como "cero piezas" y la solicitud desaparecía del informe en
+ * vez de volver a contarse por sus archivos. Por eso el vacío se descarta antes
+ * de convertir.
+ */
+function declarado(v: unknown): number | null {
+  if (v === null || v === undefined || v === "") return null;
+  const n = Number(v);
+  return Number.isFinite(n) && n >= 0 ? Math.floor(n) : null;
+}
+
+/**
+ * ¿Esta solicitud trae la cuenta puesta a mano?
+ *
+ * Por una sola solicitud pueden salir muchos artes —una parrilla, un mes de
+ * redimensiones— y no todos se suben uno por uno. Cuando el diseñador escribe
+ * cuántos hizo, esa cuenta MANDA sobre los archivos subidos: es la que refleja
+ * el trabajo real y la que se lleva al informe de fin de mes.
+ */
+export function tieneCuentaDeclarada(r: SolicitudAnalitica): boolean {
+  return declarado(r.piezasDeclaradas) !== null || declarado(r.redimensionesDeclaradas) !== null;
+}
+
+/**
+ * Diseños principales.
+ *
+ * Si la solicitud trae CUALQUIER cuenta escrita a mano, mandan los números
+ * escritos y el que falte cuenta como cero. Mezclar lo declarado con lo
+ * deducido de los archivos daba resultados que nadie sabía explicar: quien
+ * escribe "7 redimensiones" está diciendo lo que hizo, no pidiendo que además
+ * se le sume un arte por haber subido un archivo.
+ */
+export function principalesDe(r: SolicitudAnalitica): number {
+  if (tieneCuentaDeclarada(r)) return declarado(r.piezasDeclaradas) ?? 0;
+  // Sin nada declarado, la regla de siempre: una solicitud con entregables
+  // cuenta como un diseño principal.
+  return archivosDe(r) > 0 ? 1 : 0;
+}
+
+/** Redimensiones: las declaradas, o los archivos subidos más allá del primero. */
+export function redimensionesDe(r: SolicitudAnalitica): number {
+  if (tieneCuentaDeclarada(r)) return declarado(r.redimensionesDeclaradas) ?? 0;
+  return Math.max(archivosDe(r) - 1, 0);
+}
+
+/** Archivos realmente subidos al tablero. */
+export function archivosDe(r: SolicitudAnalitica): number {
   return Array.isArray(r.creatives) ? r.creatives.length : 0;
+}
+
+/** Piezas totales = diseños principales + redimensiones. */
+export function piezasDe(r: SolicitudAnalitica): number {
+  return principalesDe(r) + redimensionesDe(r);
 }
 
 /**
@@ -118,6 +186,9 @@ export function piezasDe(r: SolicitudAnalitica): number {
  */
 export function fechaPublicacion(r: SolicitudAnalitica): string {
   if (r.status !== "Publicado") return "";
+  // Desde que el tablero lo guarda aparte, se usa ese campo: es exacto y no
+  // depende de rebuscar en el texto del historial.
+  if (r.publishedAt) return String(r.publishedAt).slice(0, 10);
   const marcas = (r.history || [])
     .filter(h => /publicad/i.test(String(h?.action || "")) && h?.at)
     .map(h => String(h!.at).slice(0, 10))
@@ -181,11 +252,10 @@ function acumular(
   for (const r of solicitudes) {
     const clave = clavePara(r);
     const fila = mapa.get(clave) || filaVacia(clave);
-    const piezas = piezasDe(r);
     fila.solicitudes += 1;
-    fila.piezas += piezas;
-    fila.principales += piezas > 0 ? 1 : 0;
-    fila.redimensiones += piezas > 0 ? piezas - 1 : 0;
+    fila.piezas += piezasDe(r);
+    fila.principales += principalesDe(r);
+    fila.redimensiones += redimensionesDe(r);
     fila.publicadas += r.status === "Publicado" ? 1 : 0;
     mapa.set(clave, fila);
   }
@@ -213,10 +283,9 @@ export function resumenAnalitico(
   let aTiempo = 0, medidas = 0, sinDato = 0;
 
   for (const r of solicitudes) {
-    const n = piezasDe(r);
-    piezas += n;
-    principales += n > 0 ? 1 : 0;
-    redimensiones += n > 0 ? n - 1 : 0;
+    piezas += piezasDe(r);
+    principales += principalesDe(r);
+    redimensiones += redimensionesDe(r);
     if (r.status === "Publicado") {
       publicadas += 1;
       const publicada = fechaPublicacion(r);

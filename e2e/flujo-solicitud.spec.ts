@@ -119,7 +119,9 @@ test.describe("Trabajar una solicitud", () => {
     creadas.push(id);
 
     await abrirSolicitud(page, id);
-    await expect(page.getByText(/Subir entregables/i)).toBeVisible({ timeout: 25_000 });
+    // El texto del cajón cambió al añadirse arrastrar y soltar (commit b3cdf37);
+    // la prueba se había quedado buscando el rótulo viejo.
+    await expect(page.getByText(/Arrastra los entregables aquí/i)).toBeVisible({ timeout: 25_000 });
     // Formatos anunciados: estáticos, animados, video y archivos.
     await expect(page.getByText(/Animados: GIF, APNG/i)).toBeVisible();
     await expect(page.getByText(/Video: MP4, WEBM, MOV/i)).toBeVisible();
