@@ -1,14 +1,19 @@
 import { NextResponse } from "next/server";
 import { checkRateLimit, getClientIp } from "@/lib/rate-limit";
+import { emailDeIdToken, findByEmail } from "@/lib/team";
 
 /**
  * Verificación server-side para eliminación permanente de solicitudes.
  *
  * Flujo:
- *  1. Cliente envía POST { requestId, adminPass, by }.
- *  2. Server valida la contraseña contra la del Trafficker o la de Diseño.
- *     Diseño también borra porque son quienes detectan los duplicados y las
- *     pruebas; se les pide SU contraseña y queda en el registro quién fue.
+ *  1. Cliente envía POST { requestId, by } con `adminPass` o con `idToken`.
+ *  2. Server autoriza de dos maneras, porque a la plataforma se entra de dos
+ *     formas y las dos tienen que servir aquí:
+ *       · `adminPass`: la contraseña compartida del Trafficker o de Diseño.
+ *       · `idToken`: quien ya tiene contraseña PERSONAL. Se resuelve su correo
+ *         contra Firebase y se mira su perfil en el directorio.
+ *     Diseño borra porque son quienes detectan los duplicados y las pruebas;
+ *     en el registro queda quién fue.
  *  3. Si es válido:
  *     - Escribe entrada de audit_log en Firestore (SIN contenido sensible:
  *       solo id, acción, usuario, timestamp).
@@ -42,6 +47,8 @@ const FS_BASE = `https://firestore.googleapis.com/v1/projects/${PROJECT_ID}/data
 type Body = {
   requestId?: string;
   adminPass?: string;
+  /** De quien entra con contraseña personal en vez de la compartida. */
+  idToken?: string;
   by?: string;
 };
 
@@ -105,22 +112,31 @@ export async function POST(req: Request) {
       );
     }
 
-    const { requestId, adminPass, by }: Body = await req.json();
+    const { requestId, adminPass, idToken, by }: Body = await req.json();
 
     if (!requestId || typeof requestId !== "string") {
       return NextResponse.json({ ok: false, error: "requestId requerido." }, { status: 400 });
     }
-    if (!adminPass || typeof adminPass !== "string") {
+    if ((!adminPass || typeof adminPass !== "string") && !idToken) {
       return NextResponse.json({ ok: false, error: "Falta la contraseña." }, { status: 400 });
     }
 
-    // Quién está borrando, según la contraseña que acertó. Se guarda en el
-    // registro: es lo único que queda cuando alguien pregunta "¿y esta
-    // solicitud?".
-    const perfil =
-      (PASS_TRAFFICKER && adminPass === PASS_TRAFFICKER) ? "Trafficker"
-      : (PASS_DESIGNER && adminPass === PASS_DESIGNER) ? "Diseño"
+    // Quién está borrando. Se guarda en el registro: es lo único que queda
+    // cuando alguien pregunta "¿y esta solicitud?".
+    let perfil =
+      (adminPass && PASS_TRAFFICKER && adminPass === PASS_TRAFFICKER) ? "Trafficker"
+      : (adminPass && PASS_DESIGNER && adminPass === PASS_DESIGNER) ? "Diseño"
       : "";
+
+    // Contraseña personal: se comprueba contra Firebase y el perfil sale del
+    // directorio. Sin esto, quien ya se puso contraseña propia no podía borrar
+    // aunque su perfil sí tuviera permiso.
+    if (!perfil && idToken && typeof idToken === "string") {
+      const correo = await emailDeIdToken(idToken);
+      const persona = correo ? findByEmail(correo) : null;
+      if (persona?.role === "admin") perfil = "Trafficker";
+      else if (persona?.role === "designer") perfil = "Diseño";
+    }
 
     if (!perfil) {
       return NextResponse.json(

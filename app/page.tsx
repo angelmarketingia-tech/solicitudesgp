@@ -2136,12 +2136,13 @@ export default function GanaPlayMainApp() {
   //  2. Cliente borra archivos en Storage (creatives/{reqId}/*).
   //  3. Cliente borra subcolecciones (messages) y el documento principal.
   // La solicitud NO queda en historial funcional: se elimina del todo.
-  const performPermanentDelete = useCallback(async (req: RequestType, adminPass: string) => {
-    // 1. Verificación server-side con la contraseña de admin
+  const performPermanentDelete = useCallback(async (req: RequestType, credencial: { adminPass?: string; idToken?: string }) => {
+    // 1. Verificación server-side: la contraseña compartida o, si quien borra
+    //    ya tiene la suya propia, el identificador de su sesión de Firebase.
     const verifyRes = await fetch("/api/requests/admin-delete", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ requestId: req.id, adminPass, by: userName }),
+      body: JSON.stringify({ requestId: req.id, ...credencial, by: userName }),
     });
     const verifyData = await verifyRes.json().catch(() => ({}));
     if (!verifyRes.ok || !verifyData.ok) {
@@ -2192,7 +2193,16 @@ export default function GanaPlayMainApp() {
     }
     setDeleteLoading(true);
     try {
-      await performPermanentDelete(req, cleanPass);
+      // Primero la contraseña compartida del perfil; si no es esa, se prueba
+      // como PERSONAL. Quien ya se puso la suya propia no tiene por qué saberse
+      // además la compartida.
+      try {
+        await performPermanentDelete(req, { adminPass: cleanPass });
+      } catch (primerFallo) {
+        const personal = await entrarConPersonal(miCorreo, cleanPass);
+        if (!personal.ok || !personal.idToken) throw primerFallo;
+        await performPermanentDelete(req, { idToken: personal.idToken });
+      }
       addToast(`Solicitud ${req.id} eliminada permanentemente.`, 'success');
       setDeleteModalOpen(null);
       setDeleteAdminPass("");
