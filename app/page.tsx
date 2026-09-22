@@ -5320,7 +5320,7 @@ export default function GanaPlayMainApp() {
                                 <div style={{ marginBottom: '18px' }}>
                                   <p style={titulo}>2 · Conector de claude.ai o Claude Desktop</p>
                                   <p style={nota}>
-                                    Ajustes → Conectores → Añadir conector personalizado, y pega este enlace.
+                                    En claude.ai: Customize → Connectors → Add custom connector, y pega este enlace.
                                     Lleva tu token dentro, así que trátalo como una contraseña.
                                   </p>
                                   <div style={caja}>{enlaceConector}</div>
