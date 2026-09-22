@@ -5165,7 +5165,7 @@ export default function GanaPlayMainApp() {
       {perfilOpen && (
         <div className="modal-overlay" onClick={() => setPerfilOpen(false)}
           style={{ position: 'fixed', inset: 0, zIndex: 240, background: 'rgba(15,23,42,0.45)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '24px' }}>
-          <div className="card" onClick={e => e.stopPropagation()} style={{ width: '100%', maxWidth: '440px', padding: '24px' }}>
+          <div className="card" onClick={e => e.stopPropagation()} style={{ width: '100%', maxWidth: '440px', padding: '24px', maxHeight: 'calc(100vh - 48px)', overflowY: 'auto', overscrollBehavior: 'contain' }}>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '18px' }}>
               <h3 style={{ margin: 0, fontSize: '16px', display: 'flex', alignItems: 'center', gap: '8px', color: 'var(--text-primary)' }}>
                 <User size={17} color="var(--accent-color)" /> Mi perfil
