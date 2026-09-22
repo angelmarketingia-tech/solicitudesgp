@@ -73,10 +73,11 @@ const BUILTIN_DIRECTORY: DirectoryEntry[] = [
   // falta desplegar: basta agregarla a la variable AUTH_USERS.
   { email: "gabriela.martinez@ganaplay.com", role: "comercial",     name: "Gabriela" },
   { email: "comercial@ganaplay.com",        role: "comercial",      name: "Comercial" },
-  // Equipo comercial (septiembre de 2026). Entran con su contraseña personal.
-  { email: "juan.saavedra@ganaplay.com",    role: "comercial",      name: "Juan Saavedra" },
-  { email: "diego.barreto@ganaplay.com",    role: "comercial",      name: "Diego Barreto" },
-  { email: "juan.currea@ganaplay.com",      role: "comercial",      name: "Juan Currea" },
+  // Equipo comercial (septiembre de 2026). Mismo alcance que Roberto:
+  // solicitudes, historial, Promocionales y CMR, sin ver lo del Trafficker.
+  { email: "juan.saavedra@ganaplay.com",    role: "ejecutivo",      name: "Juan Saavedra" },
+  { email: "diego.barreto@ganaplay.com",    role: "ejecutivo",      name: "Diego Barreto" },
+  { email: "juan.currea@ganaplay.com",      role: "ejecutivo",      name: "Juan Currea" },
   { email: "juan.gutierrez@ganaplay.com",   role: "operator",       name: "Juan" },
   // Dirección: ven todo el trabajo de la empresa, sin poder de borrado.
   { email: "sebastian.calderon@ganaplay.com", role: "administrative", name: "Sebastian" },

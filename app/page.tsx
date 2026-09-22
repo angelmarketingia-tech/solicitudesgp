@@ -221,7 +221,7 @@ const ADMINISTRATIVE_USER_LIST = ["Andres", "Sebastian"];
 // ─── Ejecutivos comerciales (Roberto) ───
 // Levantan y siguen sus solicitudes, y trabajan Promocionales y CMR. NO ven las
 // solicitudes que levanta el Trafficker ni el Centro de Diseño.
-const EJECUTIVO_USER_LIST = ["Roberto"];
+const EJECUTIVO_USER_LIST = ["Roberto", "Juan Saavedra", "Diego Barreto", "Juan Currea"];
 
 type RequestStatus = "Publicado" | "Denegado" | "Declinada" | "En Proceso" | "Planeando" | "Pendiente";
 type RequestPriority = "Bajo" | "Medio" | "Alto" | "Urgente";

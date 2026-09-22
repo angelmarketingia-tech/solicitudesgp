@@ -71,7 +71,7 @@ export const OPERATOR_USERS = ["Juan"] as const;
 export const ADMINISTRATIVE_USERS = ["Andres", "Sebastian"] as const;
 
 /** Ejecutivos comerciales — espejo del backend. */
-export const EJECUTIVO_USERS = ["Roberto"] as const;
+export const EJECUTIVO_USERS = ["Roberto", "Juan Saavedra", "Diego Barreto", "Juan Currea"] as const;
 
 /** Correo asociado a un nombre de usuario (cadena vacía si no está registrado). */
 export function emailForUser(name: string): string {
