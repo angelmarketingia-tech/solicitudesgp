@@ -25,6 +25,7 @@ import { uploadToStorage, storageErrorMessage } from '@/lib/storage-upload';
 import { publicLink } from '@/lib/public-url';
 import { filtrarPorFechas, imprimirInforme, resumirSolicitudes } from '@/lib/report-export';
 import { piezasDe, principalesDe, redimensionesDe, tieneCuentaDeclarada } from '@/lib/analytics';
+import { esCreadorDe } from '@/lib/autoria';
 import {
   mediaKindOf, maxBytesFor, formatMB,
   DELIVERABLE_EXTS, DELIVERABLE_ACCEPT, MAX_FILE_BYTES, MAX_VIDEO_BYTES,
@@ -307,6 +308,9 @@ type RequestType = {
   referenceImages?: string[];     // varias imágenes de referencia (data URLs)
   referenceFiles?: ReferenceFile[]; // documentos de referencia (PDF/Word) en Storage
   assignedTo?: string;
+  /** Quién la creó (no quién figura como solicitante). */
+  createdBy?: string;
+  createdByEmail?: string;
   /** Quién le dio Publicado y cuándo. A esa persona se le cuenta el trabajo. */
   publishedBy?: string;
   publishedAt?: string;
@@ -1208,6 +1212,10 @@ export default function GanaPlayMainApp() {
       creatives: [],
       comments: 0,
       history: [{ action: "Solicitud creada", by: requesterName, at: now }],
+      // Quién la creó DE VERDAD (no quién figura como solicitante, que se
+      // puede escribir a mano). Lo usa el permiso de eliminar lo propio.
+      createdBy: userName,
+      createdByEmail: miCorreo,
       ...(initialMessages.length > 0 ? { messages: initialMessages } : {}),
       ...(referenceImgs.length > 0 ? { referenceImages: referenceImgs } : {}),
       ...(referenceFiles.length > 0 ? { referenceFiles } : {}),
@@ -2144,7 +2152,7 @@ export default function GanaPlayMainApp() {
     const verifyRes = await fetch("/api/requests/admin-delete", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ requestId: req.id, ...credencial, by: userName }),
+      body: JSON.stringify({ requestId: req.id, ...credencial, email: miCorreo, by: userName }),
     });
     const verifyData = await verifyRes.json().catch(() => ({}));
     if (!verifyRes.ok || !verifyData.ok) {
@@ -2175,8 +2183,8 @@ export default function GanaPlayMainApp() {
 
   const handleConfirmPermanentDelete = async () => {
     if (!deleteModalOpen) return;
-    if (!puedeEliminar) {
-      addToast("Tu perfil no puede eliminar solicitudes.", 'error');
+    if (!puedeEliminarSolicitud(deleteModalOpen)) {
+      addToast("Solo puedes eliminar las solicitudes que creaste tú.", 'error');
       return;
     }
     const req = deleteModalOpen;
@@ -2227,6 +2235,14 @@ export default function GanaPlayMainApp() {
    * queda registro de quién borró: es destructivo y no se deshace.
    */
   const puedeEliminar = role === 'admin' || role === 'designer';
+  /**
+   * Eliminar ESTA solicitud. El Ejecutivo Comercial solo las que creó él; la
+   * misma regla (`esCreadorDe`) la aplica el servidor, así que el botón y la
+   * API nunca discrepan.
+   */
+  const puedeEliminarSolicitud = (req: RequestType | null) =>
+    Boolean(req) && (puedeEliminar ||
+      (esEjecutivo && esCreadorDe(req!, { email: miCorreo, nombre: userName })));
 
   const handleConfirmDecline = async () => {
     if (!declineModalOpen) return;
@@ -4682,7 +4698,7 @@ export default function GanaPlayMainApp() {
                 )}
 
                 {/* Eliminar permanentemente — Trafficker y Diseño */}
-                {puedeEliminar && (
+                {puedeEliminarSolicitud(selectedReq) && (
                   <button
                     onClick={() => { setDeleteModalOpen(selectedReq); setDeleteAdminPass(""); setDeleteShowPass(false); }}
                     style={{
@@ -5460,7 +5476,7 @@ export default function GanaPlayMainApp() {
       )}
 
       {/* ─── MODAL: ELIMINACIÓN PERMANENTE (solo Trafficker) ─── */}
-      {deleteModalOpen && puedeEliminar && (
+      {deleteModalOpen && puedeEliminarSolicitud(deleteModalOpen) && (
         <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', backdropFilter: 'blur(3px)', zIndex: 200, display: 'flex', justifyContent: 'center', alignItems: 'center', padding: '20px' }}>
           <div className="card" style={{ maxWidth: '520px', width: '100%', padding: '26px', borderTop: '4px solid var(--danger, #d92d20)' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '14px' }}>

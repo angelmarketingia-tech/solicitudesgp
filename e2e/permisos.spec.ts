@@ -77,7 +77,7 @@ for (const perfil of Object.keys(MATRIZ) as Perfil[]) {
       else await expect(boton).toHaveCount(0);
     });
 
-    test(`"Eliminar permanentemente" lo tienen el Trafficker y Diseño`, async ({ page }) => {
+    test(`"Eliminar permanentemente" lo tienen el Trafficker y Diseño (y el Ejecutivo, en lo suyo)`, async ({ page }) => {
       test.setTimeout(120_000);
       test.skip(!sesionDisponible(perfil), `Sin sesión de ${perfil}`);
       test.skip(perfil === "comercial", "Comercial no tiene tablero de solicitudes");
@@ -91,7 +91,9 @@ for (const perfil of Object.keys(MATRIZ) as Perfil[]) {
       // sigue pidiendo su contraseña al confirmar.
       const borrar = page.getByRole("button", { name: /Eliminar permanentemente/i });
       if (perfil === "admin" || perfil === "designer") await expect(borrar).toBeVisible();
-      else await expect(borrar).toHaveCount(0);
+      // El Ejecutivo Comercial lo ve solo en las que creó él: depende de cuál
+      // salga primera en la tabla. Lo cubre cambios-tablero.spec.ts con datos fijos.
+      else if (perfil !== "ejecutivo") await expect(borrar).toHaveCount(0);
     });
 
     test(`todos pueden crear una solicitud`, async ({ page }) => {

@@ -71,6 +71,8 @@ export type IncomingRequest = {
   referenceImage?: string;
   requestKind?: string;
   source?: string;
+  /** Quién la crea de verdad (p. ej. el dueño del token del agente). */
+  createdByEmail?: string;
 };
 
 /** Normaliza la prioridad de cualquier app a la escala de GanaPlay Diseño. */
@@ -132,6 +134,7 @@ export async function crearSolicitud(
     creatives: [],
     comments: 0,
     history: [{ action: `Solicitud creada desde ${source}`, by: requesterName, at: nowIso }],
+    ...(body.createdByEmail ? { createdBy: requesterName, createdByEmail: body.createdByEmail.trim().toLowerCase() } : {}),
     updatedAt: now,
   };
   if (body.referenceImage) newReq.referenceImage = body.referenceImage;

@@ -223,3 +223,28 @@ test("el conteo declarado manda sobre los archivos en los Indicadores", async ({
     .locator("xpath=following-sibling::div[1]");
   await expect(total).toHaveText("19", { timeout: 30_000 });
 });
+
+test("el Ejecutivo Comercial ve «Eliminar» solo en las solicitudes que creó", async ({ page }) => {
+  // Una suya y una de la CM (el Ejecutivo no ve las del Trafficker).
+  await montarTablero(page, {
+    rol: "ejecutivo", nombre: "Roberto", correo: "roberto.andrade@ganaplay.com",
+    solicitudes: [
+      { id: "GP9101", title: "Pauta de Roberto", status: "Pendiente", priority: "Medio", area: "Pauta",
+        requesterName: "Roberto", requesterEmails: ["roberto.andrade@ganaplay.com"],
+        requestDate: "2026-09-20", deliveryDate: "2026-09-30", piezas: 0 },
+      { id: "GP9102", title: "Pieza de la CM", status: "Pendiente", priority: "Medio", area: "Redes Sociales",
+        requesterName: "Community Manager", requesterEmails: ["fernanda.monrroy@ganaplay.com", "roberto.andrade@ganaplay.com"],
+        requestDate: "2026-09-20", deliveryDate: "2026-09-30", piezas: 0 },
+    ],
+  });
+  const eliminar = page.getByRole("button", { name: /Eliminar permanentemente/i });
+
+  await page.goto("/?solicitud=GP9101");
+  await expect(page.getByText("Pauta de Roberto").first()).toBeVisible({ timeout: 40_000 });
+  await expect(eliminar).toBeVisible();
+
+  // Aparece en copia de la de la CM, pero no la creó: no puede borrarla.
+  await page.goto("/?solicitud=GP9102");
+  await expect(page.getByText("Pieza de la CM").first()).toBeVisible({ timeout: 40_000 });
+  await expect(eliminar).toHaveCount(0);
+});

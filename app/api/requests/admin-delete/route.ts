@@ -1,7 +1,8 @@
 import { NextResponse } from "next/server";
 import { checkRateLimit, getClientIp } from "@/lib/rate-limit";
-import { emailDeIdToken, findByEmail } from "@/lib/team";
-import { deleteDocConfirmado, listSubDocIds } from "@/lib/firestore-rest";
+import { emailDeIdToken, findByEmail, verificarCredenciales, type DirectoryEntry } from "@/lib/team";
+import { deleteDocConfirmado, getDoc, listSubDocIds } from "@/lib/firestore-rest";
+import { esCreadorDe } from "@/lib/autoria";
 
 /**
  * Verificación server-side para eliminación permanente de solicitudes.
@@ -54,6 +55,12 @@ type Body = {
   adminPass?: string;
   /** De quien entra con contraseña personal en vez de la compartida. */
   idToken?: string;
+  /**
+   * Correo de quien borra. Hace falta para los perfiles que comparten
+   * contraseña con otros (el Ejecutivo Comercial usa la general): sin el
+   * correo, la contraseña sola no dice QUIÉN es.
+   */
+  email?: string;
   by?: string;
 };
 
@@ -117,7 +124,7 @@ export async function POST(req: Request) {
       );
     }
 
-    const { requestId, adminPass, idToken, by }: Body = await req.json();
+    const { requestId, adminPass, idToken, email, by }: Body = await req.json();
 
     if (!requestId || typeof requestId !== "string") {
       return NextResponse.json({ ok: false, error: "requestId requerido." }, { status: 400 });
@@ -136,11 +143,35 @@ export async function POST(req: Request) {
     // Contraseña personal: se comprueba contra Firebase y el perfil sale del
     // directorio. Sin esto, quien ya se puso contraseña propia no podía borrar
     // aunque su perfil sí tuviera permiso.
+    // Quien entra con su propia contraseña, o con correo + contraseña de su
+    // perfil: se sabe QUIÉN es, no solo qué perfil tiene.
+    let persona: DirectoryEntry | null = null;
     if (!perfil && idToken && typeof idToken === "string") {
       const correo = await emailDeIdToken(idToken);
-      const persona = correo ? findByEmail(correo) : null;
-      if (persona?.role === "admin") perfil = "Trafficker";
-      else if (persona?.role === "designer") perfil = "Diseño";
+      persona = correo ? findByEmail(correo) : null;
+    }
+    if (!perfil && !persona && email && adminPass) {
+      persona = verificarCredenciales(email, adminPass);
+    }
+    if (!perfil && persona?.role === "admin") perfil = "Trafficker";
+    else if (!perfil && persona?.role === "designer") perfil = "Diseño";
+
+    // El Ejecutivo Comercial puede eliminar, pero SOLO las solicitudes que
+    // creó él. Se comprueba aquí, contra la base, y no solo en la pantalla:
+    // el botón oculto no protege nada si alguien llama a la API a mano.
+    if (!perfil && persona?.role === "ejecutivo") {
+      const solicitud = await getDoc("requests", requestId,
+        ["createdByEmail", "requesterEmail", "requesterEmails", "requesterName"]);
+      if (!solicitud) {
+        return NextResponse.json({ ok: false, error: "Esa solicitud ya no existe." }, { status: 404 });
+      }
+      if (!esCreadorDe(solicitud, { email: persona.email, nombre: persona.name })) {
+        return NextResponse.json(
+          { ok: false, error: "No autorizado. Solo puedes eliminar las solicitudes que creaste tú." },
+          { status: 403 },
+        );
+      }
+      perfil = "Ejecutivo Comercial";
     }
 
     if (!perfil) {

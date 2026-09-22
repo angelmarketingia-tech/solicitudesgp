@@ -244,6 +244,7 @@ async function ejecutarHerramienta(nombre: string, args: Args, quien: DirectoryE
         // La identidad sale del token, nunca de lo que diga el agente.
         requesterName: quien.name,
         requesterEmail: quien.email,
+        createdByEmail: quien.email,
         source: `agente de IA de ${quien.name}`,
       },
     );
