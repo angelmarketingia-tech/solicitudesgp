@@ -31,6 +31,9 @@ export const USER_DIRECTORY: Record<string, string> = {
   "Gabriela": "gabriela.martinez@ganaplay.com",
   "Juan": "juan.gutierrez@ganaplay.com",
   "Comercial": "comercial@ganaplay.com",
+  "Juan Saavedra": "Juan.Saavedra@ganaplay.com",
+  "Diego Barreto": "diego.barreto@ganaplay.com",
+  "Juan Currea": "juan.currea@ganaplay.com",
   "Sebastian": "sebastian.calderon@ganaplay.com",
   "Andres": "andres.clavijo@ganaplay.com",
 };
