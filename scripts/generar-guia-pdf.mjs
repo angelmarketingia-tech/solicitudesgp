@@ -1,7 +1,8 @@
 /**
  * Genera la guía en PDF para conectar un agente de IA.
  *
- *   npm run guia:pdf
+ *   npm run guia:pdf          (genera las dos guías)
+ *   node scripts/generar-guia-pdf.mjs ORIGEN.md public/DESTINO.pdf
  *
  * POR QUÉ ASÍ: el texto vive SOLO en `GUIA_AGENTE_IA.md`. Este script lo lee,
  * lo maqueta con la marca GanaPlay y lo imprime a `public/guia-agente-ia.pdf`,
@@ -19,8 +20,9 @@ import { chromium } from "playwright";
 
 const aqui = path.dirname(fileURLToPath(import.meta.url));
 const raiz = path.join(aqui, "..");
-const ORIGEN = path.join(raiz, "GUIA_AGENTE_IA.md");
-const DESTINO = path.join(raiz, "public", "guia-agente-ia.pdf");
+// Por defecto, la guía de conexión; con argumentos, cualquier otra guía.
+const ORIGEN = path.join(raiz, process.argv[2] || "GUIA_AGENTE_IA.md");
+const DESTINO = path.join(raiz, process.argv[3] || "public/guia-agente-ia.pdf");
 
 // ─── Marca ──────────────────────────────────────────────────────────────────
 const VERDE = "#00783e";

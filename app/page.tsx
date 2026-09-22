@@ -467,6 +467,8 @@ export default function GanaPlayMainApp() {
   const [mcpCargando, setMcpCargando] = useState(false);
   const [mcpError, setMcpError] = useState("");
   const [mcpPanel, setMcpPanel] = useState<{ token: string; url: string; urlConToken?: string } | null>(null);
+  // Lenguaje del ejemplo de "agente propio" en el panel de conexión.
+  const [mcpLenguaje, setMcpLenguaje] = useState<'python' | 'ts'>('python');
   const [loginDesignerName, setLoginDesignerName] = useState("");
   const [loginOperatorName, setLoginOperatorName] = useState("");
   const [loginAdministrativeName, setLoginAdministrativeName] = useState("");
@@ -5284,6 +5286,58 @@ export default function GanaPlayMainApp() {
                           {(() => {
                             const comando = `claude mcp add --transport http --scope user ganaplay ${mcpPanel.url} --header "Authorization: Bearer ${mcpPanel.token}"`;
                             const enlaceConector = mcpPanel.urlConToken || `${mcpPanel.url}/t/${mcpPanel.token}`;
+                            // Agente propio con la API de Claude: el uso más común en
+                            // empresa. El token va en una variable de entorno y NUNCA
+                            // dentro del código, por eso son dos cajas separadas.
+                            const variableEntorno = `$env:GANAPLAY_TOKEN = "${mcpPanel.token}"`;
+                            const codigoAgente = mcpLenguaje === 'python'
+                              ? [
+                                  'import os',
+                                  'import anthropic',
+                                  '',
+                                  'client = anthropic.Anthropic()',
+                                  '',
+                                  'response = client.beta.messages.create(',
+                                  '    model="claude-opus-5",',
+                                  '    max_tokens=16000,',
+                                  '    betas=["mcp-client-2025-11-20"],',
+                                  '    mcp_servers=[{',
+                                  '        "type": "url",',
+                                  `        "url": "${mcpPanel.url}",`,
+                                  '        "name": "ganaplay",',
+                                  '        "authorization_token": os.environ["GANAPLAY_TOKEN"],',
+                                  '    }],',
+                                  '    tools=[{"type": "mcp_toolset", "mcp_server_name": "ganaplay"}],',
+                                  '    messages=[{"role": "user", "content": "¿Con qué cuenta estás conectado a GanaPlay?"}],',
+                                  ')',
+                                  '',
+                                  'for block in response.content:',
+                                  '    if block.type == "text":',
+                                  '        print(block.text)',
+                                ].join('\n')
+                              : [
+                                  'import Anthropic from "@anthropic-ai/sdk";',
+                                  '',
+                                  'const client = new Anthropic();',
+                                  '',
+                                  'const response = await client.beta.messages.create({',
+                                  '  model: "claude-opus-5",',
+                                  '  max_tokens: 16000,',
+                                  '  betas: ["mcp-client-2025-11-20"],',
+                                  '  mcp_servers: [{',
+                                  '    type: "url",',
+                                  `    url: "${mcpPanel.url}",`,
+                                  '    name: "ganaplay",',
+                                  '    authorization_token: process.env.GANAPLAY_TOKEN,',
+                                  '  }],',
+                                  '  tools: [{ type: "mcp_toolset", mcp_server_name: "ganaplay" }],',
+                                  '  messages: [{ role: "user", content: "¿Con qué cuenta estás conectado a GanaPlay?" }],',
+                                  '});',
+                                  '',
+                                  'for (const block of response.content) {',
+                                  '  if (block.type === "text") console.log(block.text);',
+                                  '}',
+                                ].join('\n');
                             const copiar = (texto: string, que: string) => {
                               navigator.clipboard?.writeText(texto)
                                 .then(() => addToast(`${que} copiado.`, 'success'))
@@ -5318,7 +5372,36 @@ export default function GanaPlayMainApp() {
                                 </div>
 
                                 <div style={{ marginBottom: '18px' }}>
-                                  <p style={titulo}>2 · Conector de claude.ai o Claude Desktop</p>
+                                  <p style={titulo}>2 · Agente propio (API de Claude)</p>
+                                  <p style={nota}>
+                                    Para un bot o asistente programado con la API de Claude: el caso más común.
+                                    Primero guarda el token como variable de entorno (en PowerShell):
+                                  </p>
+                                  <div style={caja}>{variableEntorno}</div>
+                                  {botonCopiar(variableEntorno, 'Variable')}
+                                  <p style={{ ...nota, margin: '12px 0 8px' }}>Y conecta el agente con este código:</p>
+                                  <div style={{ display: 'flex', gap: '6px', marginBottom: '8px' }}>
+                                    {(['python', 'ts'] as const).map(l => (
+                                      <button key={l} type="button" onClick={() => setMcpLenguaje(l)}
+                                        style={{
+                                          padding: '5px 12px', fontSize: '11px', fontWeight: 700, borderRadius: '8px', cursor: 'pointer', width: 'auto',
+                                          background: mcpLenguaje === l ? 'var(--accent-soft)' : 'var(--surface-1)',
+                                          color: mcpLenguaje === l ? 'var(--accent-dark)' : 'var(--text-secondary)',
+                                          border: `1px solid ${mcpLenguaje === l ? 'var(--accent-color)' : 'var(--border-color)'}`,
+                                        }}>
+                                        {l === 'python' ? 'Python' : 'TypeScript'}
+                                      </button>
+                                    ))}
+                                  </div>
+                                  <pre style={{ ...caja, maxHeight: '220px', whiteSpace: 'pre', wordBreak: 'normal', overflowX: 'auto', margin: '0 0 8px' }}>{codigoAgente}</pre>
+                                  {botonCopiar(codigoAgente, 'Código')}
+                                  <p style={{ ...nota, margin: '8px 0 0' }}>
+                                    El token nunca va escrito dentro del código. Todo lo que haga el agente sale a tu nombre.
+                                  </p>
+                                </div>
+
+                                <div style={{ marginBottom: '18px' }}>
+                                  <p style={titulo}>3 · Conector de claude.ai o Claude Desktop</p>
                                   <p style={nota}>
                                     En claude.ai: Customize → Connectors → Add custom connector, y pega este enlace.
                                     Lleva tu token dentro, así que trátalo como una contraseña.
@@ -5328,7 +5411,7 @@ export default function GanaPlayMainApp() {
                                 </div>
 
                                 <div style={{ marginBottom: '18px' }}>
-                                  <p style={titulo}>3 · Por si lo necesitas suelto</p>
+                                  <p style={titulo}>4 · Por si lo necesitas suelto</p>
                                   <p style={nota}>Dirección del servidor y token, para cualquier otro cliente MCP.</p>
                                   <div style={caja}>{mcpPanel.url}</div>
                                   <div style={caja}>{mcpPanel.token}</div>
@@ -5339,6 +5422,13 @@ export default function GanaPlayMainApp() {
                                   Para comprobar que quedó bien, pídele a tu agente:
                                   <em> «¿con qué cuenta estás conectado a GanaPlay?»</em>
                                 </p>
+
+                                {/* Guía aparte para quien conecta un agente propio: más
+                                    técnica que la general, para pasársela a quien lo programa. */}
+                                <a href="/guia-agente-api.pdf" target="_blank" rel="noopener noreferrer"
+                                  style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', fontSize: '12px', fontWeight: 700, color: 'var(--accent-color)', textDecoration: 'none', marginTop: '10px' }}>
+                                  <Download size={13} /> Descargar la guía para conectar un agente propio (PDF)
+                                </a>
 
                                 <button onClick={() => { setMcpPanel(null); setMcpPass(''); }}
                                   style={{ background: 'none', border: 'none', color: 'var(--text-muted)', fontSize: '11.5px', cursor: 'pointer', textDecoration: 'underline', padding: '10px 0 0', width: 'auto' }}>

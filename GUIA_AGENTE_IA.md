@@ -48,7 +48,7 @@ claude --version
 3. Abajo del todo, abre **Conectar mi agente de IA**.
 4. Escribe tu contraseña y pulsa **Mostrar mis datos de conexión**.
 
-Aparecen tres formas de conectar, cada una con su botón **Copiar**. Desde esa
+Aparecen cuatro formas de conectar, cada una con su botón **Copiar**. Desde esa
 misma pantalla también se descarga esta guía.
 
 > **El token equivale a tu cuenta.** No caduca y no se comparte: quien lo tenga
@@ -83,7 +83,7 @@ Dentro de una sesión de Claude Code también puedes escribir `/mcp` para verlo.
 ### Opción B · Conector de claude.ai
 
 claude.ai no deja escribir cabeceras, así que se usa el **enlace que ya lleva
-el token dentro** (el de la **opción 2** de la pantalla):
+el token dentro** (el de la **opción 3** de la pantalla):
 
 1. En claude.ai: **Customize → Connectors → Add custom connector**.
    En planes Team o Enterprise lo añade quien administra la organización, desde
@@ -97,8 +97,10 @@ Ese enlace **es** tu credencial: trátalo igual que una contraseña.
 
 ### Opción C · Agentes propios por API
 
-Si el agente lo programas tú contra la API de Anthropic, pásale el servidor y el
-token:
+Es el caso más común en empresa: un bot o asistente programado con la API de
+Claude. La **opción 2** de la pantalla trae el código listo en Python y
+TypeScript, y hay una **guía aparte** con el paso a paso completo (se descarga
+al final de esa misma pantalla). En resumen, se le pasa el servidor y el token:
 
 ```json
 {
