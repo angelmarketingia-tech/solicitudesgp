@@ -57,3 +57,5 @@ ngrok.log
 
 # Sesiones guardadas por las pruebas E2E
 e2e/.auth/
+
+migracion-referencias/

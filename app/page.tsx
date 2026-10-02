@@ -1309,20 +1309,29 @@ export default function GanaPlayMainApp() {
           continue;
         }
 
-        // Imágenes comprimibles (JPG/PNG/WEBP y no gigantes): van en el doc.
+        // Las imágenes se comprimen, pero el resultado va a Storage, NO dentro
+        // de la solicitud.
+        //
+        // POR QUÉ: guardarlas dentro engordaba cada solicitud hasta 260 KB, y
+        // como el tablero se carga entero, cada persona que lo abría se
+        // descargaba las referencias de TODAS las solicitudes: ~145 MB por
+        // carga, 170 GB al mes y una factura de Google que no venía de los
+        // artes, sino de esto. En Storage la imagen se baja solo cuando alguien
+        // abre esa solicitud.
+        let aSubir: File = file;
         if (isImg && !validateImage(file)) {
           try {
-            newImgs.push(await compressImageToDataUrl(file));
-            continue;
+            const comprimida = await compressImageToDataUrl(file);
+            const blob = await (await fetch(comprimida)).blob();
+            aSubir = new File([blob], file.name, { type: blob.type || file.type });
           } catch (imgErr) {
-            console.warn('[referencias] no se pudo comprimir, se sube a Storage:', imgErr);
+            console.warn('[referencias] no se pudo comprimir; se sube tal cual:', imgErr);
           }
         }
 
-        // Todo lo demás (GIF, imágenes grandes, PDF, Word) → Storage.
         setRefProgress(`Subiendo "${file.name}"…`);
         try {
-          const url = await uploadToStorage('creatives/_references', file, {
+          const url = await uploadToStorage('creatives/_references', aSubir, {
             onProgress: (pct) => setRefProgress(`Subiendo "${file.name}"… ${pct}%`),
           });
           if (isImg) newImgs.push(url);
@@ -1330,10 +1339,12 @@ export default function GanaPlayMainApp() {
         } catch (upErr) {
           console.error('[referencias] Storage falló:', upErr);
           // Respaldo solo para archivos pequeños: data URL dentro del propio
-          // documento (el límite de un doc de Firestore es 1 MB).
+          // documento (el límite de un doc de Firestore es 1 MB). Se guarda la
+          // versión ya comprimida, no el original: es lo que menos engorda la
+          // solicitud, y esto es justo lo que encarecía la factura.
           let fallback: string | null = null;
-          if (file.size <= MAX_REF_INLINE_BYTES) {
-            try { fallback = await readFileAsDataUrl(file); } catch { /* cae abajo */ }
+          if (aSubir.size <= MAX_REF_INLINE_BYTES) {
+            try { fallback = await readFileAsDataUrl(aSubir); } catch { /* cae abajo */ }
           }
           if (fallback) {
             if (isImg) newImgs.push(fallback);
