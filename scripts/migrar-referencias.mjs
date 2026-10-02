@@ -38,7 +38,7 @@ import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 import { initializeApp } from "firebase/app";
-import { getFirestore, collection, doc, getDocs, updateDoc } from "firebase/firestore";
+import { getFirestore, collection, doc, getDoc, getDocs, updateDoc } from "firebase/firestore";
 import { getStorage, ref, uploadBytes, getDownloadURL, deleteObject } from "firebase/storage";
 
 const aqui = path.dirname(fileURLToPath(import.meta.url));
@@ -72,13 +72,33 @@ const RESPALDO = path.join(CARPETA, "solicitudes");
 const MAPA = path.join(CARPETA, "mapa.json");
 const REGISTRO = path.join(CARPETA, "registro.log");
 
-/** Campos de texto que pueden traer una imagen incrustada. */
+/**
+ * Dónde hay archivos incrustados dentro de una solicitud.
+ *
+ * Los cinco sitios salieron de medir el respaldo campo por campo. Con 652
+ * solicitudes: referencias 112,5 MB · imágenes de comentarios 11,6 MB ·
+ * referencia suelta antigua 1,8 MB · entregables 1,0 MB · documentos 0,4 MB.
+ * Todos son textos que van tal cual a un `src` o a un enlace, así que para la
+ * plataforma da igual que digan `data:…` o una URL de Storage.
+ */
+const SITIOS = [
+  { campo: "referenceImages" },                   // lista de textos
+  { campo: "referenceImage", suelto: true },      // solicitudes viejas: una sola
+  { campo: "messages", sub: "image" },            // imágenes de comentarios
+  { campo: "creatives", sub: "url" },             // entregables
+  { campo: "referenceFiles", sub: "url" },        // PDF y Word de referencia
+];
+
 const CAMPO_LISTA = "referenceImages";
-const CAMPO_SUELTO = "referenceImage"; // solicitudes viejas, una sola imagen
+const CAMPO_SUELTO = "referenceImage";
 
 const EXT_DE_TIPO = {
   "image/jpeg": "jpg", "image/jpg": "jpg", "image/png": "png",
   "image/webp": "webp", "image/gif": "gif", "image/avif": "avif",
+  "image/svg+xml": "svg", "video/mp4": "mp4", "video/quicktime": "mov",
+  "video/webm": "webm", "application/pdf": "pdf", "application/zip": "zip",
+  "application/msword": "doc",
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document": "docx",
 };
 
 const args = process.argv.slice(2);
@@ -132,16 +152,59 @@ async function traerSolicitudes({ desdeDisco = false } = {}) {
   return snap.docs.map((d) => ({ id: d.id, datos: d.data() }));
 }
 
-/** Las imágenes incrustadas de una solicitud, con su sitio exacto. */
+/** Los archivos incrustados de una solicitud, cada uno con su sitio exacto. */
 function imagenesIncrustadas(datos) {
   const salida = [];
-  const lista = Array.isArray(datos[CAMPO_LISTA]) ? datos[CAMPO_LISTA] : [];
-  lista.forEach((v, i) => { if (esDataUrl(v)) salida.push({ campo: CAMPO_LISTA, indice: i, dataUrl: v }); });
-  if (esDataUrl(datos[CAMPO_SUELTO])) salida.push({ campo: CAMPO_SUELTO, indice: null, dataUrl: datos[CAMPO_SUELTO] });
+  for (const sitio of SITIOS) {
+    if (sitio.suelto) {
+      if (esDataUrl(datos[sitio.campo])) {
+        salida.push({ clave: sitio.campo, dataUrl: datos[sitio.campo], nombre: null });
+      }
+      continue;
+    }
+    const lista = Array.isArray(datos[sitio.campo]) ? datos[sitio.campo] : [];
+    lista.forEach((entrada, i) => {
+      const valor = sitio.sub ? entrada?.[sitio.sub] : entrada;
+      if (!esDataUrl(valor)) return;
+      salida.push({
+        clave: sitio.sub ? `${sitio.campo}[${i}].${sitio.sub}` : `${sitio.campo}[${i}]`,
+        dataUrl: valor,
+        nombre: sitio.sub && typeof entrada?.name === "string" ? entrada.name : null,
+      });
+    });
+  }
   return salida;
 }
 
-const clave = (img) => (img.indice === null ? CAMPO_SUELTO : `${CAMPO_LISTA}[${img.indice}]`);
+/**
+ * Lee o escribe en un sitio de los de arriba a partir de su clave
+ * (`creatives[2].url`). Se usa justo antes de guardar, sobre el documento
+ * recién leído: así el cambio cae donde toca aunque la solicitud haya cambiado
+ * entre la subida y ahora.
+ */
+function partirClave(clave) {
+  const m = /^([A-Za-z]+)(?:\[(\d+)\])?(?:\.([A-Za-z]+))?$/.exec(clave);
+  if (!m) return null;
+  return { campo: m[1], indice: m[2] === undefined ? null : Number(m[2]), sub: m[3] || null };
+}
+
+function leerEn(datos, clave) {
+  const p = partirClave(clave);
+  if (!p) return undefined;
+  if (p.indice === null) return datos[p.campo];
+  const entrada = Array.isArray(datos[p.campo]) ? datos[p.campo][p.indice] : undefined;
+  return p.sub ? entrada?.[p.sub] : entrada;
+}
+
+/** Devuelve una copia del campo de primer nivel con el valor ya cambiado. */
+function conValorCambiado(datos, clave, valor) {
+  const p = partirClave(clave);
+  if (p.indice === null) return { campo: p.campo, valor };
+  const lista = Array.isArray(datos[p.campo]) ? [...datos[p.campo]] : [];
+  if (p.sub) lista[p.indice] = { ...(lista[p.indice] || {}), [p.sub]: valor };
+  else lista[p.indice] = valor;
+  return { campo: p.campo, valor: lista };
+}
 
 // ─────────────────────────── respaldo ───────────────────────────
 
@@ -170,6 +233,7 @@ async function estado() {
   const solicitudes = await traerSolicitudes();
   const mapa = leerMapa();
   let incrustadas = 0, bytesIncrustados = 0, enStorage = 0, docsPendientes = 0, pesoTotal = 0;
+  const porSitio = {};
 
   for (const s of solicitudes) {
     pesoTotal += Buffer.byteLength(JSON.stringify(s.datos));
@@ -178,6 +242,8 @@ async function estado() {
     for (const img of imgs) {
       incrustadas++;
       bytesIncrustados += img.dataUrl.length;
+      porSitio[img.clave.replace(/\[\d+\]/, "[]")] =
+        (porSitio[img.clave.replace(/\[\d+\]/, "[]")] || 0) + img.dataUrl.length;
     }
     const lista = Array.isArray(s.datos[CAMPO_LISTA]) ? s.datos[CAMPO_LISTA] : [];
     enStorage += lista.filter((v) => typeof v === "string" && v.startsWith("http")).length;
@@ -189,8 +255,10 @@ async function estado() {
     (n, d) => n + Object.values(d).filter((e) => e.estado === "aplicada").length, 0);
 
   console.log(`Solicitudes: ${solicitudes.length}  ·  peso total ${mb(pesoTotal)}  ·  media ${kb(pesoTotal / solicitudes.length)}`);
-  console.log(`Imágenes incrustadas: ${incrustadas} en ${docsPendientes} solicitudes (${mb(bytesIncrustados)})`);
-  console.log(`Imágenes ya en Storage: ${enStorage}`);
+  console.log(`Archivos incrustados: ${incrustadas} en ${docsPendientes} solicitudes (${mb(bytesIncrustados)})`);
+  Object.entries(porSitio).sort((a, b) => b[1] - a[1])
+    .forEach(([k, v]) => console.log(`   ${mb(v).padStart(9)}  ${k}`));
+  console.log(`Referencias ya en Storage: ${enStorage}`);
   console.log(`Subidas comprobadas y a la espera de aplicar: ${subidasListas}`);
   console.log(`Ya aplicadas: ${yaAplicadas}`);
   console.log(`Respaldo en disco: ${fs.existsSync(RESPALDO) ? `${fs.readdirSync(RESPALDO).length} ficheros` : "NO HAY"}`);
@@ -226,7 +294,7 @@ async function subir() {
     process.stdout.write(`${s.id} (${imgs.length} img) `);
 
     for (const img of imgs) {
-      const k = clave(img);
+      const k = img.clave;
       if (mapa[s.id][k]?.estado === "verificada" || mapa[s.id][k]?.estado === "aplicada") {
         process.stdout.write("·");
         continue;
@@ -238,7 +306,8 @@ async function subir() {
         fallos++;
         continue;
       }
-      const ext = EXT_DE_TIPO[trozos.tipo] || "bin";
+      const extDelNombre = img.nombre ? (img.nombre.split(".").pop() || "").toLowerCase() : "";
+      const ext = EXT_DE_TIPO[trozos.tipo] || (/^[a-z0-9]{2,5}$/.test(extDelNombre) ? extDelNombre : "bin");
       // Plana dentro de creatives/<id>: así la limpieza que ya hace la
       // plataforma al eliminar una solicitud (listAll de creatives/<id>)
       // también se lleva estas imágenes y no quedan huérfanas.
@@ -284,55 +353,74 @@ async function subir() {
 
 async function aplicar() {
   const mapa = leerMapa();
-  const solicitudes = await traerSolicitudes();
   let cambiadas = 0, imagenes = 0, ahorro = 0, fallos = 0;
 
-  for (const s of solicitudes) {
-    if (idsPedidos && !idsPedidos.includes(s.id)) continue;
-    const entradas = mapa[s.id];
-    if (!entradas) continue;
+  for (const id of Object.keys(mapa)) {
+    if (idsPedidos && !idsPedidos.includes(id)) continue;
+    const entradas = mapa[id];
+    const pendientes = Object.entries(entradas).filter(([, e]) => e.estado === "verificada");
+    if (!pendientes.length) continue;
     if (cambiadas >= limite) break;
 
-    const imgs = imagenesIncrustadas(s.datos);
-    if (!imgs.length) continue;
+    // Se relee la solicitud JUSTO ahora, no la copia con la que se subió:
+    // entre la subida y este momento alguien puede haber dejado un comentario
+    // o subido una pieza, y escribir la copia vieja se lo llevaría por delante.
+    const snap = await getDoc(doc(db, "requests", id));
+    if (!snap.exists()) {
+      console.log(`! ${id}: ya no existe, se salta`);
+      continue;
+    }
+    let datos = snap.data();
 
-    const lista = Array.isArray(s.datos[CAMPO_LISTA]) ? [...s.datos[CAMPO_LISTA]] : [];
     const parche = {};
     const aplicadas = [];
     let ahorroDoc = 0;
 
-    for (const img of imgs) {
-      const k = clave(img);
-      const e = entradas[k];
-      if (!e || e.estado !== "verificada") continue;
+    for (const [k, e] of pendientes) {
+      const actual = leerEn(datos, k);
+      if (!esDataUrl(actual)) {
+        // Ya no hay nada incrustado ahí: o se aplicó antes, o la solicitud
+        // cambió. En ninguno de los dos casos hay que escribir.
+        console.log(`· ${id} ${k}: ya no está incrustada, se salta`);
+        continue;
+      }
+      const trozos = partirDataUrl(actual);
+      if (!trozos || trozos.sha !== e.sha256) {
+        console.log(`! ${id} ${k}: el documento cambió desde la subida — se deja como estaba`);
+        fallos++;
+        continue;
+      }
 
-      // Última comprobación antes de escribir: la URL sigue sirviendo.
+      // Última comprobación antes de escribir: lo subido sigue descargándose
+      // y sigue siendo byte a byte lo mismo que hay dentro del documento.
       try {
-        const r = await fetch(e.url, { method: "GET" });
+        const r = await fetch(e.url);
         if (!r.ok) throw new Error(`descarga ${r.status}`);
         const bajado = Buffer.from(await r.arrayBuffer());
         if (crypto.createHash("sha256").update(bajado).digest("hex") !== e.sha256) {
           throw new Error("lo descargado no coincide");
         }
       } catch (err) {
-        console.log(`! ${s.id} ${k}: ${err?.message || err} — se deja como estaba`);
+        console.log(`! ${id} ${k}: ${err?.message || err} — se deja como estaba`);
         fallos++;
         continue;
       }
 
-      if (img.campo === CAMPO_SUELTO) parche[CAMPO_SUELTO] = e.url;
-      else lista[img.indice] = e.url;
+      // Se van acumulando sobre `datos` para que dos cambios en el mismo
+      // campo (dos referencias, dos comentarios) no se pisen entre sí.
+      const { campo, valor } = conValorCambiado(datos, k, e.url);
+      datos = { ...datos, [campo]: valor };
+      parche[campo] = valor;
       aplicadas.push(k);
       ahorroDoc += (e.ahorro || 0) - e.url.length;
     }
 
     if (!aplicadas.length) continue;
-    if (aplicadas.some((k) => k.startsWith(CAMPO_LISTA))) parche[CAMPO_LISTA] = lista;
 
     try {
-      await updateDoc(doc(db, "requests", s.id), parche);
+      await updateDoc(doc(db, "requests", id), parche);
     } catch (err) {
-      console.log(`✗ ${s.id}: no se pudo guardar (${err?.message || err})`);
+      console.log(`✗ ${id}: no se pudo guardar (${err?.message || err})`);
       fallos++;
       continue;
     }
@@ -342,8 +430,8 @@ async function aplicar() {
     cambiadas++;
     imagenes += aplicadas.length;
     ahorro += ahorroDoc;
-    console.log(`✓ ${s.id}: ${aplicadas.length} imagen(es) fuera del documento (−${kb(ahorroDoc)})`);
-    anotar(`aplicar ${s.id}: ${aplicadas.join(", ")}`);
+    console.log(`✓ ${id}: ${aplicadas.length} archivo(s) fuera del documento (−${kb(ahorroDoc)})`);
+    anotar(`aplicar ${id}: ${aplicadas.join(", ")}`);
   }
 
   console.log(`\nSolicitudes cambiadas: ${cambiadas}  ·  imágenes movidas: ${imagenes}  ·  fallos: ${fallos}`);
@@ -360,22 +448,37 @@ async function comprobar() {
   let malas = 0;
 
   for (const s of elegidas) {
-    const lista = Array.isArray(s.datos[CAMPO_LISTA]) ? s.datos[CAMPO_LISTA] : [];
-    const sueltas = s.datos[CAMPO_SUELTO] ? [s.datos[CAMPO_SUELTO]] : [];
+    // Los mismos sitios que mira la migración, con su clave, para poder
+    // señalar exactamente cuál no abre.
+    const puntos = [];
+    for (const sitio of SITIOS) {
+      if (sitio.suelto) {
+        if (s.datos[sitio.campo]) puntos.push({ clave: sitio.campo, valor: s.datos[sitio.campo] });
+        continue;
+      }
+      const lista = Array.isArray(s.datos[sitio.campo]) ? s.datos[sitio.campo] : [];
+      lista.forEach((entrada, i) => {
+        const valor = sitio.sub ? entrada?.[sitio.sub] : entrada;
+        if (typeof valor === "string" && valor) {
+          puntos.push({ clave: sitio.sub ? `${sitio.campo}[${i}].${sitio.sub}` : `${sitio.campo}[${i}]`, valor });
+        }
+      });
+    }
+
     const peso = Buffer.byteLength(JSON.stringify(s.datos));
     const titulo = String(s.datos.title || "").slice(0, 44);
-    console.log(`${s.id}: documento ${kb(peso)} · ${lista.length + sueltas.length} imagen(es) · "${titulo}" · ${s.datos.status || "?"}`);
-    for (const u of [...lista, ...sueltas]) {
-      if (esDataUrl(u)) { console.log(`   incrustada todavía (${kb(u.length)})`); continue; }
+    console.log(`${s.id}: documento ${kb(peso)} · ${puntos.length} archivo(s) · "${titulo}" · ${s.datos.status || "?"}`);
+    for (const { clave, valor } of puntos) {
+      if (esDataUrl(valor)) { console.log(`   incrustado todavía (${kb(valor.length)})  ${clave}`); continue; }
       try {
-        const r = await fetch(u);
+        const r = await fetch(valor);
         const bytes = Buffer.from(await r.arrayBuffer());
         const ok = r.ok && bytes.length > 0;
         if (!ok) malas++;
-        console.log(`   ${ok ? "✓" : "✗"} ${r.status} ${r.headers.get("content-type")} ${kb(bytes.length)}`);
+        console.log(`   ${ok ? "✓" : "✗"} ${r.status} ${r.headers.get("content-type")} ${kb(bytes.length).padStart(7)}  ${clave}`);
       } catch (err) {
         malas++;
-        console.log(`   ✗ ${err?.message || err}`);
+        console.log(`   ✗ ${err?.message || err}  ${clave}`);
       }
     }
   }
@@ -384,27 +487,69 @@ async function comprobar() {
 
 // ─────────────────────────── revertir ────────────────────────────
 
+/**
+ * Vuelve a meter dentro del documento lo que la migración sacó.
+ *
+ * Va entrada por entrada, no campo por campo: devolver `messages` o
+ * `creatives` enteros tal como estaban en el respaldo se llevaría por delante
+ * los comentarios y las piezas añadidos desde entonces. Solo se toca el sitio
+ * exacto que la migración cambió, y solo si ahí sigue estando la URL que ella
+ * puso.
+ */
 async function revertir() {
   if (!idsPedidos) {
     console.error('Hay que decir qué solicitudes: --ids GP7054,GP7055  (o --ids TODAS)');
     process.exit(1);
   }
-  const deDisco = await traerSolicitudes({ desdeDisco: true });
+  const mapa = leerMapa();
   const todas = idsPedidos.includes("TODAS");
-  let hechas = 0;
+  let hechas = 0, saltadas = 0;
 
-  for (const s of deDisco) {
-    if (!todas && !idsPedidos.includes(s.id)) continue;
+  for (const id of Object.keys(mapa)) {
+    if (!todas && !idsPedidos.includes(id)) continue;
+    const entradas = Object.entries(mapa[id]).filter(([, e]) => e.estado === "aplicada");
+    if (!entradas.length) continue;
+
+    const original = path.join(RESPALDO, `${id}.json`);
+    if (!fs.existsSync(original)) {
+      console.log(`! ${id}: no está en el respaldo, no se puede revertir`);
+      saltadas++;
+      continue;
+    }
+    const antes = JSON.parse(fs.readFileSync(original, "utf8"));
+    const snap = await getDoc(doc(db, "requests", id));
+    if (!snap.exists()) { console.log(`! ${id}: ya no existe`); saltadas++; continue; }
+    let datos = snap.data();
+
     const parche = {};
-    if (Array.isArray(s.datos[CAMPO_LISTA])) parche[CAMPO_LISTA] = s.datos[CAMPO_LISTA];
-    if (s.datos[CAMPO_SUELTO] !== undefined) parche[CAMPO_SUELTO] = s.datos[CAMPO_SUELTO];
-    if (!Object.keys(parche).length) continue;
-    await updateDoc(doc(db, "requests", s.id), parche);
+    const vueltas = [];
+    for (const [k, e] of entradas) {
+      if (leerEn(datos, k) !== e.url) {
+        console.log(`· ${id} ${k}: ahí ya no está lo que puso la migración, se salta`);
+        saltadas++;
+        continue;
+      }
+      const dataUrl = leerEn(antes, k);
+      if (!esDataUrl(dataUrl)) {
+        console.log(`! ${id} ${k}: el respaldo no tiene el original`);
+        saltadas++;
+        continue;
+      }
+      const { campo, valor } = conValorCambiado(datos, k, dataUrl);
+      datos = { ...datos, [campo]: valor };
+      parche[campo] = valor;
+      vueltas.push(k);
+    }
+
+    if (!vueltas.length) continue;
+    await updateDoc(doc(db, "requests", id), parche);
+    for (const k of vueltas) mapa[id][k].estado = "verificada";
+    guardarMapa(mapa);
     hechas++;
-    console.log(`↩ ${s.id} vuelto a como estaba en el respaldo`);
-    anotar(`revertir ${s.id}`);
+    console.log(`↩ ${id}: ${vueltas.length} archivo(s) de vuelta dentro del documento`);
+    anotar(`revertir ${id}: ${vueltas.join(", ")}`);
   }
-  console.log(`\nRevertidas: ${hechas}`);
+  console.log(`\nSolicitudes revertidas: ${hechas}  ·  saltadas: ${saltadas}`);
 }
 
 // ─────────────────────────────────────────────────────────────────

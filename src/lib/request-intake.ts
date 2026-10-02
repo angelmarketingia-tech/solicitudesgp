@@ -8,6 +8,7 @@
  * La solicitud queda en el tablero exactamente igual que una creada a mano.
  */
 import { createDoc, nextRequestId } from "./firestore-rest";
+import { partirDataUrl, subirBytes } from "./storage-rest";
 
 export const VALID_PRIORITIES = ["Bajo", "Medio", "Alto", "Urgente"] as const;
 /**
@@ -137,7 +138,28 @@ export async function crearSolicitud(
     ...(body.createdByEmail ? { createdBy: requesterName, createdByEmail: body.createdByEmail.trim().toLowerCase() } : {}),
     updatedAt: now,
   };
-  if (body.referenceImage) newReq.referenceImage = body.referenceImage;
+  // La referencia que llega incrustada (`data:…`) se deja en Storage, no
+  // dentro del documento: el tablero se carga entero, así que una imagen
+  // guardada aquí se la descarga todo el que abra la plataforma. Si la subida
+  // falla se mantiene incrustada solo cuando es pequeña; una grande se
+  // descarta y queda anotado, porque engorda el tablero para todos.
+  if (body.referenceImage) {
+    const incrustada = partirDataUrl(body.referenceImage);
+    if (!incrustada) {
+      newReq.referenceImage = body.referenceImage; // ya era una URL
+    } else {
+      const ext = incrustada.tipo.split("/")[1]?.split("+")[0] || "bin";
+      const url = await subirBytes(`creatives/${id}`, incrustada.bytes, incrustada.tipo, `referencia_${id}.${ext}`);
+      if (url) newReq.referenceImage = url;
+      else if (incrustada.bytes.length <= 300 * 1024) newReq.referenceImage = body.referenceImage;
+      else {
+        (newReq.history as unknown[]).push({
+          action: "La imagen de referencia no se pudo adjuntar (demasiado grande)",
+          by: requesterName, at: nowIso,
+        });
+      }
+    }
+  }
   if ((VALID_KINDS as readonly string[]).includes(body.requestKind || "")) {
     newReq.requestKind = body.requestKind;
   }

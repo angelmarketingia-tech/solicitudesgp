@@ -68,3 +68,39 @@ test("una referencia Word de 2.3 MB se adjunta sin errores", async ({ page }) =>
 
   console.log("Errores de consola durante la subida:", errors.length ? errors : "ninguno");
 });
+
+/**
+ * Una imagen de referencia NO se guarda dentro de la solicitud.
+ *
+ * Antes se comprimía y se incrustaba como `data:…` en el propio documento.
+ * Con 652 solicitudes eso eran 112 MB dentro de la colección, y como el
+ * tablero se carga entero, cada persona que lo abría se los descargaba: eso
+ * —no el almacenamiento— es lo que generaba la factura de Google. Si esta
+ * prueba se pone roja, la factura vuelve.
+ */
+test("una imagen de referencia queda en Storage, no dentro de la solicitud", async ({ page }) => {
+  test.setTimeout(180_000);
+
+  // Un PNG de verdad (1x1), para que la compresión por canvas tenga algo real.
+  const png = Buffer.from(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DAAAMBAQBiH7bvAAAAAElFTkSuQmCC",
+    "base64",
+  );
+
+  await loginAsAdmin(page);
+  await page.getByRole("button", { name: /^Nueva$/i }).click();
+  await expect(page.getByRole("heading", { name: /Nueva solicitud de diseño/i })).toBeVisible();
+
+  await page.locator('input[type="file"][accept*="wordprocessingml"]').setInputFiles({
+    name: "referencia-de-prueba.png",
+    mimeType: "image/png",
+    buffer: png,
+  });
+
+  await expect(page.getByText(/1 referencia lista/i)).toBeVisible({ timeout: 150_000 });
+
+  const src = await page.getByAltText("Referencia 1").getAttribute("src");
+  expect(src, "la referencia debería ser una URL de Storage").toMatch(/^https?:\/\//);
+  expect(src, "la referencia NO debe ir incrustada en el documento").not.toMatch(/^data:/);
+  expect(src).toContain("creatives");
+});
