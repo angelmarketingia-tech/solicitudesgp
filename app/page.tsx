@@ -322,6 +322,10 @@ type RequestType = {
    */
   piezasDeclaradas?: number;
   redimensionesDeclaradas?: number;
+  /** Cuántas solicitudes representa la ficha (los registros manuales agrupan). */
+  solicitudesDeclaradas?: number;
+  /** Trabajo anotado a mano: lo pidieron fuera del tablero. */
+  registroManual?: boolean;
   creatives: Creative[];
   comments?: number;
   // Comentarios/recomendaciones: viven en el propio documento (array), no en
@@ -1536,6 +1540,36 @@ export default function GanaPlayMainApp() {
     }
   };
 
+  /**
+   * Declara las piezas de una solicitud SIN abrirla.
+   *
+   * Lo usa la lista de «pendientes de declarar» de Indicadores: el trabajo
+   * terminado que no tiene ni archivos ni cuenta vale cero en el informe, y
+   * obligar a abrir una por una las decenas que hay hacía que nadie lo
+   * arreglara nunca.
+   */
+  const declararPiezasDe = useCallback(async (
+    id: string, artes: number, redimensiones: number,
+  ): Promise<boolean> => {
+    try {
+      const actual = requests.find(r => r.id === id);
+      const entry: HistoryEntry = {
+        action: `Conteo declarado: ${artes} arte(s), ${redimensiones} redimensión(es)`,
+        by: userName, at: new Date().toISOString(),
+      };
+      await updateDoc(doc(db, "requests", id), {
+        piezasDeclaradas: artes,
+        redimensionesDeclaradas: redimensiones,
+        history: [...(actual?.history || []), entry],
+        updatedAt: serverTimestamp(),
+      });
+      return true;
+    } catch (err: unknown) {
+      addToast('No se pudo guardar el conteo: ' + (err instanceof Error ? err.message : ''), 'error');
+      return false;
+    }
+  }, [requests, userName, addToast]);
+
   const sendTeamMessage = async () => {
     if (!teamInput.trim()) return;
     const newMsg = {
@@ -2693,6 +2727,73 @@ export default function GanaPlayMainApp() {
     try { guardado = sessionStorage.getItem("gp_email") || localStorage.getItem("gp_email") || ""; } catch { /* SSR */ }
     return guardado || emailForUser(userName) || (role === 'admin' ? DEFAULT_TRAFFICKER_EMAIL : "");
   }, [userName, role]);
+
+  /**
+   * Anota un trabajo que NUNCA entró por el tablero.
+   *
+   * POR QUÉ: buena parte de lo que hace Diseño se pide de viva voz —«necesito
+   * esto para ya», en la oficina o por mensaje— y se entrega igual de viva voz.
+   * A fin de mes ese trabajo no existía en el informe, así que el informe
+   * medía la disciplina al usar la plataforma, no la producción.
+   *
+   * Se guarda como una solicitud normal y corriente, ya publicada y a nombre
+   * de quien la hizo: así cuenta en TODOS los sitios (indicadores, PDF,
+   * historial) sin inventar un segundo circuito de contabilidad. Queda marcada
+   * con `registroManual` para poder distinguirla cuando haga falta.
+   */
+  const registrarEntregaManual = useCallback(async (datos: {
+    titulo: string; fecha: string; area: string; tipo: string;
+    solicitante: string; solicitudes: number; artes: number; redimensiones: number;
+  }): Promise<boolean> => {
+    const id = await reservarIdLibre();
+    if (!id) {
+      addToast('No se pudo reservar un número de solicitud. Revisa la conexión.', 'error');
+      return false;
+    }
+    const ahora = new Date().toISOString();
+    const dia = datos.fecha || ahora.split('T')[0];
+    try {
+      await setDoc(doc(db, "requests", id), {
+        id,
+        title: datos.titulo.trim(),
+        copy: '',
+        format: 'static',
+        requestKind: datos.tipo,
+        dimensions: ['General'],
+        countries: ['Internacional'],
+        requestDate: dia,
+        deliveryDate: dia,
+        status: 'Publicado',
+        priority: 'Medio',
+        area: datos.area,
+        requesterName: datos.solicitante.trim() || 'Pedido fuera de la plataforma',
+        requesterEmail: '',
+        objective: '',
+        channels: [],
+        creatives: [],
+        comments: 0,
+        assignedTo: userName,
+        publishedBy: userName,
+        publishedAt: ahora,
+        piezasDeclaradas: datos.artes,
+        redimensionesDeclaradas: datos.redimensiones,
+        solicitudesDeclaradas: datos.solicitudes,
+        registroManual: true,
+        createdBy: userName,
+        createdByEmail: miCorreo,
+        history: [{
+          action: `Registrado a mano: pedido fuera de la plataforma (${datos.solicitudes} solicitud(es), ${datos.artes + datos.redimensiones} pieza(s))`,
+          by: userName, at: ahora,
+        }],
+        updatedAt: serverTimestamp(),
+      });
+      addToast(`Registrado como ${id}. Ya cuenta en tu informe.`, 'success');
+      return true;
+    } catch (err: unknown) {
+      addToast('No se pudo registrar: ' + (err instanceof Error ? err.message : ''), 'error');
+      return false;
+    }
+  }, [reservarIdLibre, userName, miCorreo, addToast]);
 
   /** Prueba una contraseña compartida contra el servidor (sin iniciar sesión). */
   const validarCompartida = useCallback(async (correo: string, password: string): Promise<boolean> => {
@@ -3969,6 +4070,9 @@ export default function GanaPlayMainApp() {
             disenadores={DESIGNER_USERS}
             tipos={KIND_IDS}
             coloresEstado={ESTADO_COLORES}
+            areasSugeridas={AREAS}
+            onRegistrarEntrega={registrarEntregaManual}
+            onDeclararPiezas={declararPiezasDe}
             addToast={addToast} />
         )}
 

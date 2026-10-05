@@ -32,14 +32,15 @@
 import React, { useMemo, useRef, useState } from "react";
 import {
   BarChart3, CalendarDays, Download, FileText, Layers, PieChart as PieIcon,
-  Target, TrendingUp, User, Users,
+  Plus, Target, TrendingUp, User, Users,
 } from "lucide-react";
 import {
   COLOR_RESTO, MAX_CATEGORIAS, Periodo, RangoFechas, SolicitudAnalitica, VERDE_MARCA,
-  etiquetaMes, fechaPublicacion, filtrarPorFechas, piezasDe, rangoDePeriodo,
+  etiquetaMes, faltaDeclararPiezas, fechaPublicacion, filtrarPorFechas, piezasDe, rangoDePeriodo,
   repartoPorCategoria, resumenAnalitico, universoDeCategorias,
 } from "@/lib/analytics";
 import { imprimirInforme } from "@/lib/report-export";
+import { PendientesDeContar, RegistroManual } from "./RegistroDeTrabajo";
 
 type ToastFn = (msg: string, type?: "success" | "error" | "info") => void;
 
@@ -51,6 +52,15 @@ type Props = {
   /** Catálogo de tipos, en el orden en que debe leerse siempre. */
   tipos: readonly string[];
   coloresEstado: Record<string, { bg: string; text: string }>;
+  /** Áreas que ofrece el formulario de un clic. Se puede escribir otra. */
+  areasSugeridas: readonly string[];
+  /** Anota un trabajo que se pidió fuera del tablero. */
+  onRegistrarEntrega: (datos: {
+    titulo: string; fecha: string; area: string; tipo: string;
+    solicitante: string; solicitudes: number; artes: number; redimensiones: number;
+  }) => Promise<boolean>;
+  /** Pone la cuenta de piezas de una solicitud sin tener que abrirla. */
+  onDeclararPiezas: (id: string, artes: number, redimensiones: number) => Promise<boolean>;
   addToast: ToastFn;
 };
 
@@ -384,7 +394,11 @@ function Medidor({ porcentaje, color }: { porcentaje: number; color: string }) {
 // La pestaña
 // ────────────────────────────────────────────────────────────────────────────
 
-export default function AnalyticsTab({ solicitudes, userName, disenadores, tipos, coloresEstado, addToast }: Props) {
+export default function AnalyticsTab({
+  solicitudes, userName, disenadores, tipos, coloresEstado,
+  areasSugeridas, onRegistrarEntrega, onDeclararPiezas, addToast,
+}: Props) {
+  const [registroAbierto, setRegistroAbierto] = useState(false);
   const [vista, setVista] = useState<"Dashboard" | "Registros" | "Mis solicitudes">("Dashboard");
   const [periodo, setPeriodo] = useState<Periodo>("Mensual");
   const [ancla, setAncla] = useState(() => hoyIso().slice(0, 7)); // AAAA-MM
@@ -563,11 +577,24 @@ export default function AnalyticsTab({ solicitudes, userName, disenadores, tipos
           </select>
         </label>
 
-        <button type="button" className="btn" style={{ padding: "9px 16px", fontSize: "12px", marginLeft: "auto" }}
+        <button type="button" className="btn-secondary"
+          style={{ padding: "9px 16px", fontSize: "12px", marginLeft: "auto", width: "auto" }}
+          onClick={() => setRegistroAbierto(true)}>
+          <Plus size={14} /> Registrar trabajo de fuera
+        </button>
+        <button type="button" className="btn" style={{ padding: "9px 16px", fontSize: "12px" }}
           onClick={descargar}>
           <Download size={14} /> Descargar informe PDF
         </button>
       </div>
+
+      {/* Trabajo terminado que hoy vale CERO en el informe. Va arriba del todo
+          a propósito: es lo primero que hay que arreglar para que el mes
+          cuadre, y mientras esté ahí el informe está incompleto. */}
+      <PendientesDeContar
+        solicitudes={filtradas.filter(r => faltaDeclararPiezas(r) && (r.assignedTo || "") === userName)}
+        onDeclarar={onDeclararPiezas}
+        addToast={addToast} />
 
       {/* Sub-vistas */}
       <div style={{ display: "flex", gap: "6px", flexWrap: "wrap" }}>
@@ -668,6 +695,15 @@ export default function AnalyticsTab({ solicitudes, userName, disenadores, tipos
             <TablaDetalle solicitudes={filtradas} />
           </Tarjeta>
         </>
+      )}
+
+      {registroAbierto && (
+        <RegistroManual
+          areasSugeridas={areasSugeridas}
+          tipos={tipos}
+          onGuardar={onRegistrarEntrega}
+          onCerrar={() => setRegistroAbierto(false)}
+          addToast={addToast} />
       )}
     </div>
   );

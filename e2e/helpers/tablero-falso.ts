@@ -34,6 +34,10 @@ export type SolicitudFalsa = {
   /** Conteo escrito a mano por el diseñador, que manda sobre los archivos. */
   piezasDeclaradas?: number;
   redimensionesDeclaradas?: number;
+  /** Cuántas solicitudes vale la ficha (los registros de fuera agrupan varias). */
+  solicitudesDeclaradas?: number;
+  /** Anotada a mano: el trabajo se pidió fuera del tablero. */
+  registroManual?: boolean;
 };
 
 /**
@@ -113,6 +117,8 @@ function aFormatoApp(s: SolicitudFalsa) {
     })),
     piezasDeclaradas: s.piezasDeclaradas,
     redimensionesDeclaradas: s.redimensionesDeclaradas,
+    solicitudesDeclaradas: s.solicitudesDeclaradas,
+    registroManual: s.registroManual,
     comments: 0,
     history: s.publicadaEl
       ? [{ action: 'Estado cambiado a "Publicado"', by: s.assignedTo || "", at: `${s.publicadaEl}T12:00:00.000Z` }]

@@ -89,6 +89,16 @@ export type SolicitudAnalitica = SolicitudInforme & {
    */
   piezasDeclaradas?: number;
   redimensionesDeclaradas?: number;
+  /**
+   * Cuántas solicitudes representa este registro. Normalmente una, y entonces
+   * no está puesto. Lo usan los trabajos que se pidieron FUERA de la
+   * plataforma —en la oficina, por mensaje— y se anotan después de un tirón:
+   * «fueron 2 solicitudes y 6 piezas» se registra tal cual, en vez de
+   * inventar dos fichas o perder una de las dos.
+   */
+  solicitudesDeclaradas?: number;
+  /** Anotado a mano por el diseñador: no entró por el tablero. */
+  registroManual?: boolean;
 };
 
 // ─── Paleta de las gráficas ─────────────────────────────────────────────────
@@ -173,6 +183,27 @@ export function archivosDe(r: SolicitudAnalitica): number {
   return Array.isArray(r.creatives) ? r.creatives.length : 0;
 }
 
+/**
+ * Cuántas solicitudes representa esta ficha. Una, salvo que sea un registro
+ * hecho a mano que agrupa varias (ver `solicitudesDeclaradas`).
+ */
+export function solicitudesDe(r: SolicitudAnalitica): number {
+  return Math.max(declarado(r.solicitudesDeclaradas) ?? 1, 1);
+}
+
+/**
+ * Trabajo terminado que hoy cuenta CERO piezas: está publicado, nadie declaró
+ * cuántas piezas fueron y tampoco hay archivos de los que deducirlo.
+ *
+ * POR QUÉ IMPORTA: quien entrega por fuera —pasa el arte por WhatsApp, lo deja
+ * en una carpeta— no sube nada al tablero, así que su trabajo desaparecía del
+ * informe sin que nadie lo notara. Esto es lo que la pantalla de Indicadores
+ * pone delante del diseñador para que lo complete.
+ */
+export function faltaDeclararPiezas(r: SolicitudAnalitica): boolean {
+  return r.status === "Publicado" && !tieneCuentaDeclarada(r) && archivosDe(r) === 0;
+}
+
 /** Piezas totales = diseños principales + redimensiones. */
 export function piezasDe(r: SolicitudAnalitica): number {
   return principalesDe(r) + redimensionesDe(r);
@@ -252,11 +283,11 @@ function acumular(
   for (const r of solicitudes) {
     const clave = clavePara(r);
     const fila = mapa.get(clave) || filaVacia(clave);
-    fila.solicitudes += 1;
+    fila.solicitudes += solicitudesDe(r);
     fila.piezas += piezasDe(r);
     fila.principales += principalesDe(r);
     fila.redimensiones += redimensionesDe(r);
-    fila.publicadas += r.status === "Publicado" ? 1 : 0;
+    fila.publicadas += r.status === "Publicado" ? solicitudesDe(r) : 0;
     mapa.set(clave, fila);
   }
   return mapa;
@@ -279,15 +310,17 @@ export function resumenAnalitico(
 ): ResumenAnalitico {
   const { disenadores = [], ordenTipos = [] } = opciones;
 
+  let totalSolicitudes = 0;
   let principales = 0, redimensiones = 0, piezas = 0, publicadas = 0;
   let aTiempo = 0, medidas = 0, sinDato = 0;
 
   for (const r of solicitudes) {
+    totalSolicitudes += solicitudesDe(r);
     piezas += piezasDe(r);
     principales += principalesDe(r);
     redimensiones += redimensionesDe(r);
     if (r.status === "Publicado") {
-      publicadas += 1;
+      publicadas += solicitudesDe(r);
       const publicada = fechaPublicacion(r);
       const comprometida = (r.deliveryDate || "").slice(0, 10);
       if (publicada && comprometida) {
@@ -317,13 +350,13 @@ export function resumenAnalitico(
     const mes = mesDe(r);
     if (!mes) continue;
     const fila = meses.get(mes) || { mes, solicitudes: 0, piezas: 0 };
-    fila.solicitudes += 1;
+    fila.solicitudes += solicitudesDe(r);
     fila.piezas += piezasDe(r);
     meses.set(mes, fila);
   }
 
   return {
-    solicitudes: solicitudes.length,
+    solicitudes: totalSolicitudes,
     principales,
     redimensiones,
     piezas,

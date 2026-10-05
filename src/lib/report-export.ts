@@ -24,7 +24,7 @@
 import {
   VERDE_MARCA,
   etiquetaMes, fechaDeCorte, filtrarPorFechas, repartoPorCategoria,
-  resumenAnalitico, universoDeCategorias,
+  resumenAnalitico, solicitudesDe, universoDeCategorias,
 } from "./analytics";
 import type { RangoFechas, SolicitudAnalitica } from "./analytics";
 
@@ -115,8 +115,10 @@ function agrupar(
     const clave = clavePara(r);
     let fila = mapa.get(clave);
     if (!fila) { fila = { clave, total: 0, porEstado: {} }; mapa.set(clave, fila); }
-    fila.total += 1;
-    fila.porEstado[r.status] = (fila.porEstado[r.status] || 0) + 1;
+    // Un registro puede valer por varias solicitudes (las que se pidieron
+    // fuera del tablero y se anotaron juntas). Ver solicitudesDe.
+    fila.total += solicitudesDe(r);
+    fila.porEstado[r.status] = (fila.porEstado[r.status] || 0) + solicitudesDe(r);
   }
   const filas = [...mapa.values()];
   if (ordenFijo) {
@@ -140,7 +142,7 @@ export function resumirSolicitudes(
   ordenTipos: readonly string[] = [],
 ): Resumen {
   const porEstado: Record<string, number> = {};
-  for (const r of solicitudes) porEstado[r.status] = (porEstado[r.status] || 0) + 1;
+  for (const r of solicitudes) porEstado[r.status] = (porEstado[r.status] || 0) + solicitudesDe(r);
 
   const porTipo = agrupar(solicitudes, r => r.requestKind || "Sin tipo", ordenTipos);
   // Los tipos del catálogo que nadie pidió salen en cero: un informe que los
@@ -155,7 +157,7 @@ export function resumirSolicitudes(
   porTipo.sort((a, b) => pos(a.clave) - pos(b.clave) || b.total - a.total);
 
   return {
-    total: solicitudes.length,
+    total: solicitudes.reduce((n, r) => n + solicitudesDe(r), 0),
     porEstado,
     publicadas: porEstado["Publicado"] || 0,
     enProceso: (porEstado["En Proceso"] || 0) + (porEstado["Planeando"] || 0),
