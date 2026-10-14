@@ -152,6 +152,19 @@ test.describe("Formulario de solicitud", () => {
     // Escribir "v" tiene que ofrecer a Verónica.
     await expect(page.getByText("veronica.marquez@ganaplay.com")).toBeVisible({ timeout: 10_000 });
   });
+
+  /**
+   * La Community Manager coordina el contenido, y el aviso de entrega solo va
+   * a los correos que lleva la solicitud. Sin ella en la lista, las entregas
+   * de lo que pedían otros no le llegaban nunca: se enteraba por el chat, o no
+   * se enteraba. Si esta prueba se pone roja, vuelve a quedarse fuera.
+   */
+  test("el buzón de la Community Manager viene puesto como destinatario", async ({ page }) => {
+    await page.goto("/");
+    await page.getByRole("button", { name: /^Nueva$/i }).click();
+    await expect(page.getByPlaceholder(/escribe un nombre o un correo/i)).toBeVisible({ timeout: 20_000 });
+    await expect(page.getByText("community.manager@ganaplay.com")).toBeVisible({ timeout: 10_000 });
+  });
 });
 
 test.describe("Community Manager", () => {

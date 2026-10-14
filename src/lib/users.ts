@@ -91,6 +91,36 @@ export function emailForUser(name: string): string {
 }
 
 /**
+ * Con quién se abre la lista de destinatarios al crear una solicitud.
+ *
+ * Quien la pide, y SIEMPRE el buzón del puesto de Community Manager.
+ *
+ * POR QUÉ la CM va fija: el aviso de entrega se manda a los correos que lleva
+ * la solicitud, y nada más. Al no estar ella, las entregas de lo que pedían
+ * otros no le llegaban nunca, y es quien coordina el contenido: se enteraba de
+ * que una pieza estaba lista por el chat, o no se enteraba.
+ *
+ * Va PRESELECCIONADA, no escondida: aparece como un chip más y quien crea la
+ * solicitud puede quitarla si de verdad no le toca. Eso es lo que la distingue
+ * de los tres correos fijos que hubo antes, que no se veían y acababan
+ * avisando a gente que no había pedido nada.
+ */
+export function destinatariosIniciales(correoPropio: string): string[] {
+  const propio = (correoPropio || "").trim();
+  const cm = DEFAULT_COMMUNITY_EMAIL.trim();
+  const lista = [propio, cm].filter(Boolean);
+  // Sin duplicados y sin distinguir mayúsculas: si la CM crea su propia
+  // solicitud, su correo no debe salir dos veces.
+  const vistos = new Set<string>();
+  return lista.filter(e => {
+    const clave = e.toLowerCase();
+    if (vistos.has(clave)) return false;
+    vistos.add(clave);
+    return true;
+  });
+}
+
+/**
  * URL pública de la aplicación, usada en los correos.
  *
  * Se reexporta de `public-url.ts` para que NO haya dos direcciones por

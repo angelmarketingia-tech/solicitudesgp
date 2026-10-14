@@ -18,7 +18,7 @@ import {
   addDoc, query, orderBy, serverTimestamp, getDoc, getDocs, limit, limitToLast, arrayUnion, runTransaction
 } from 'firebase/firestore';
 import { ref, deleteObject, listAll } from 'firebase/storage';
-import { emailForUser, DEFAULT_TRAFFICKER_EMAIL, USER_DIRECTORY } from '@/lib/users';
+import { emailForUser, destinatariosIniciales, DEFAULT_TRAFFICKER_EMAIL, USER_DIRECTORY } from '@/lib/users';
 import { entrarConPersonal, cambiarPassword, recuperarPassword, MIN_PASSWORD } from '@/lib/account';
 import { compressImageToDataUrl, validateImage } from '@/lib/image';
 import { uploadToStorage, storageErrorMessage } from '@/lib/storage-upload';
@@ -882,11 +882,12 @@ export default function GanaPlayMainApp() {
     const def = PROFILE_DEFAULTS[role];
     if (def?.area) { setArea(def.area); setAreaOtra(false); }
     setRequesterName(def?.requesterName || userName);
-    // Solo el correo de quien está pidiendo la pieza. Antes se precargaban
-    // tres correos fijos y la entrega le llegaba a gente que no la pidió;
-    // quien quiera sumar a alguien lo agrega a mano.
+    // Quien pide la pieza y el buzón del puesto de Community Manager, que
+    // coordina el contenido (ver destinatariosIniciales). Los demás se agregan
+    // a mano: los tres correos fijos de antes avisaban a quien no había pedido
+    // nada.
     const own = emailForUser(userName) || (role === 'admin' ? DEFAULT_TRAFFICKER_EMAIL : '');
-    setRequesterEmails(own ? [own.trim()] : []);
+    setRequesterEmails(destinatariosIniciales(own));
     // Community Manager: el formato de redes ya viene sugerido (menos clics).
     if (role === 'cm') setDimensions(prev => prev.length ? prev : [DEFAULT_SOCIAL_DIMENSION]);
   }, [role, userName]);
@@ -1077,7 +1078,7 @@ export default function GanaPlayMainApp() {
     if (def?.area) { setArea(def.area); setAreaOtra(false); }
     setRequesterName(def?.requesterName || userName);
     const own = emailForUser(userName) || (role === 'admin' ? DEFAULT_TRAFFICKER_EMAIL : '');
-    setRequesterEmails(own ? [own.trim()] : []);
+    setRequesterEmails(destinatariosIniciales(own));
     setCreateModalOpen(true);
   };
   const openEditRequest = (req: RequestType) => {
