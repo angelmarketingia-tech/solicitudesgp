@@ -216,7 +216,13 @@ const OPERATOR_USER_LIST = ["Juan"];
 // ─── DIRECTIVOS (Andres, Sebastian) ───
 // Mismos permisos que CM/operador. Label en UI: "DIRECTIVOS".
 // Internamente el rol se llama "administrative" (clave técnica histórica).
-const ADMINISTRATIVE_USER_LIST = ["Andres", "Sebastian"];
+const ADMINISTRATIVE_USER_LIST = ["Andres", "Sebastian", "Fernanda"];
+
+// ─── Community Manager y Auxiliar de Marketing ───
+// El puesto dejó de ser de una sola persona en octubre de 2026, así que al
+// entrar por perfil hay que decir quién eres: si no, las dos crean a nombre
+// del puesto y el informe no distingue quién pidió qué.
+const CM_USER_LIST = ["Luisa", "Keyri"];
 
 // ─── Ejecutivos comerciales (Roberto) ───
 // Levantan y siguen sus solicitudes, y trabajan Promocionales y CMR. NO ven las
@@ -481,6 +487,7 @@ export default function GanaPlayMainApp() {
   const [loginOperatorName, setLoginOperatorName] = useState("");
   const [loginAdministrativeName, setLoginAdministrativeName] = useState("");
   const [loginEjecutivoName, setLoginEjecutivoName] = useState("");
+  const [loginCmName, setLoginCmName] = useState("");
 
   // ── Lightbox para imágenes (referencia, comentarios, entregables) ──
   // Soluciona el bug de window.open(dataURL) que el navegador bloquea
@@ -2453,10 +2460,10 @@ export default function GanaPlayMainApp() {
     if (loginRole === 'administrative') return loginAdministrativeName;
     if (loginRole === 'ejecutivo') return loginEjecutivoName;
     if (loginRole === 'admin') return 'Trafficker';
-    if (loginRole === 'cm') return 'Community Manager';
+    if (loginRole === 'cm') return loginCmName;
     if (loginRole === 'comercial') return 'Comercial';
     return '';
-  }, [loginRole, loginDesignerName, loginOperatorName, loginAdministrativeName, loginEjecutivoName]);
+  }, [loginRole, loginDesignerName, loginOperatorName, loginAdministrativeName, loginEjecutivoName, loginCmName]);
 
   /**
    * Correo con el que se intentará la contraseña PERSONAL: el que se escribió
@@ -2478,6 +2485,7 @@ export default function GanaPlayMainApp() {
       if (loginRole === "operator" && !loginOperatorName) { setLoginError("Selecciona tu nombre."); return; }
       if (loginRole === "administrative" && !loginAdministrativeName) { setLoginError("Selecciona tu nombre."); return; }
       if (loginRole === "ejecutivo" && !loginEjecutivoName) { setLoginError("Selecciona tu nombre."); return; }
+      if (loginRole === "cm" && !loginCmName) { setLoginError("Selecciona tu nombre."); return; }
     }
     if (!loginPass) { setLoginError("Ingresa la contraseña."); return; }
 
@@ -2503,6 +2511,7 @@ export default function GanaPlayMainApp() {
             role: loginRole as string, password: loginPass,
             designerName: loginDesignerName, operatorName: loginOperatorName,
             administrativeName: loginAdministrativeName, ejecutivoName: loginEjecutivoName,
+            cmName: loginCmName,
           });
 
       if (!res.ok || !data.ok) {
@@ -2575,7 +2584,7 @@ export default function GanaPlayMainApp() {
   }, [
     loginModo, loginEmail, correoDeEntrada, loginRole, loginPass,
     loginDesignerName, loginOperatorName, loginAdministrativeName, loginEjecutivoName,
-    rememberMe,
+    loginCmName, rememberMe,
   ]);
 
   /**
@@ -2950,7 +2959,7 @@ export default function GanaPlayMainApp() {
   if (!role) {
     const ROLE_CARDS = [
       { key: 'admin',          icon: '⚡', label: 'Trafficker',         sub: 'Gestión total' },
-      { key: 'cm',             icon: '🌐', label: 'Community Manager',  sub: 'Redes y contenido' },
+      { key: 'cm',             icon: '🌐', label: 'Community Manager',  sub: CM_USER_LIST.join(' · ') },
       { key: 'operator',       icon: '👤', label: 'Operador',           sub: 'Juan' },
       { key: 'comercial',      icon: '🏷️', label: 'Comercial',          sub: 'Promocionales y CMR' },
       { key: 'ejecutivo',      icon: '🤝', label: 'Ejecutivo Comercial', sub: EJECUTIVO_USER_LIST.join(' · ') },
@@ -3122,6 +3131,16 @@ export default function GanaPlayMainApp() {
                       <select value={loginAdministrativeName} onChange={e => setLoginAdministrativeName(e.target.value)}>
                         <option value="">— Selecciona tu nombre —</option>
                         {ADMINISTRATIVE_USER_LIST.map(u => <option key={u} value={u}>{u}</option>)}
+                      </select>
+                    </div>
+                  )}
+
+                  {loginRole === 'cm' && (
+                    <div style={{ marginBottom: '14px' }}>
+                      <label className="label">Tu nombre</label>
+                      <select value={loginCmName} onChange={e => setLoginCmName(e.target.value)}>
+                        <option value="">— Selecciona tu nombre —</option>
+                        {CM_USER_LIST.map(u => <option key={u} value={u}>{u}</option>)}
                       </select>
                     </div>
                   )}

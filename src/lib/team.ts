@@ -58,7 +58,10 @@ export type DirectoryEntry = { role: Role; name: string; email: string };
  */
 const BUILTIN_DIRECTORY: DirectoryEntry[] = [
   { email: "angel.vaca@ganaplay.com",       role: "admin",          name: "Trafficker" },
-  { email: "fernanda.monrroy@ganaplay.com", role: "cm",             name: "Community Manager" },
+  // El puesto de Community Manager lo tiene Luisa desde octubre de 2026; va
+  // con el correo del PUESTO, no con uno personal. Fernanda, que lo ocupaba
+  // antes, pasó a Coordinación de Marketing y entra solo por ese otro correo.
+  { email: "community.manager@ganaplay.com", role: "cm",             name: "Luisa" },
   { email: "david.gutierrez@ganaplay.com",  role: "designer",       name: "Juan David" },
   { email: "eliana.izquierdo@ganaplay.com", role: "designer",       name: "Eliana" },
   { email: "veronica.marquez@ganaplay.com", role: "designer",       name: "Verónica" },
@@ -71,7 +74,9 @@ const BUILTIN_DIRECTORY: DirectoryEntry[] = [
   // OJO: el rol de Gabriela llegó sin especificar. Queda con el perfil de menor
   // alcance (Promocionales y CMR) hasta que se confirme. Para cambiarlo no hace
   // falta desplegar: basta agregarla a la variable AUTH_USERS.
-  { email: "gabriela.martinez@ganaplay.com", role: "comercial",     name: "Gabriela" },
+  // Auxiliar de Marketing: mismo alcance que la Community Manager. Reutiliza
+  // el buzón que tenía Gabriela, que no llegó a levantar ninguna solicitud.
+  { email: "gabriela.martinez@ganaplay.com", role: "cm",             name: "Keyri" },
   { email: "comercial@ganaplay.com",        role: "comercial",      name: "Comercial" },
   // Equipo comercial (septiembre de 2026). Mismo alcance que Roberto:
   // solicitudes, historial, Promocionales y CMR, sin ver lo del Trafficker.
@@ -82,7 +87,7 @@ const BUILTIN_DIRECTORY: DirectoryEntry[] = [
   // Dirección: ven todo el trabajo de la empresa, sin poder de borrado.
   { email: "sebastian.calderon@ganaplay.com", role: "administrative", name: "Sebastian" },
   // Coordinación de Marketing: ve todo el trabajo de la empresa, como Dirección.
-  { email: "coordinador.marketing@ganaplay.com", role: "administrative", name: "Coordinadora de Marketing" },
+  { email: "coordinador.marketing@ganaplay.com", role: "administrative", name: "Fernanda" },
   { email: "andres.clavijo@ganaplay.com",     role: "administrative", name: "Andres" },
 ];
 

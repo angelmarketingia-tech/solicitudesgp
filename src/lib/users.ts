@@ -12,9 +12,10 @@ export const DEFAULT_TRAFFICKER_EMAIL =
   (process.env.NEXT_PUBLIC_DEFAULT_TRAFFICKER_EMAIL || "").trim() ||
   "angel.vaca@ganaplay.com";
 
+/** Buzón del PUESTO de Community Manager, no de quien lo ocupe hoy. */
 export const DEFAULT_COMMUNITY_EMAIL =
   (process.env.NEXT_PUBLIC_COMMUNITY_EMAIL || "").trim() ||
-  "Fernanda.Monrroy@ganaplay.com";
+  "community.manager@ganaplay.com";
 
 /**
  * Directorio nombre → correo. Completa los correos del resto del equipo
@@ -22,20 +23,21 @@ export const DEFAULT_COMMUNITY_EMAIL =
  */
 export const USER_DIRECTORY: Record<string, string> = {
   "Trafficker": DEFAULT_TRAFFICKER_EMAIL,
-  "Community Manager": DEFAULT_COMMUNITY_EMAIL,
+  "Community Manager": DEFAULT_COMMUNITY_EMAIL,   // nombre histórico del puesto
+  "Luisa": DEFAULT_COMMUNITY_EMAIL,
   "Juan David": "david.gutierrez@ganaplay.com",
   "Eliana": "Eliana.Izquierdo@ganaplay.com",
   "Verónica": "veronica.marquez@ganaplay.com",
   "Caleb": "caleb.guevara@ganaplay.com",
   "Roberto": "roberto.andrade@ganaplay.com",
-  "Gabriela": "gabriela.martinez@ganaplay.com",
+  "Keyri": "gabriela.martinez@ganaplay.com",
   "Juan": "juan.gutierrez@ganaplay.com",
   "Comercial": "comercial@ganaplay.com",
   "Juan Saavedra": "Juan.Saavedra@ganaplay.com",
   "Diego Barreto": "diego.barreto@ganaplay.com",
   "Juan Currea": "juan.currea@ganaplay.com",
   "Sebastian": "sebastian.calderon@ganaplay.com",
-  "Coordinadora de Marketing": "coordinador.marketing@ganaplay.com",
+  "Fernanda": "coordinador.marketing@ganaplay.com",
   "Andres": "andres.clavijo@ganaplay.com",
 };
 
@@ -46,7 +48,7 @@ export const USER_DIRECTORY: Record<string, string> = {
 export const DEFAULT_REQUESTER_EMAILS: string[] = [
   "angel.vaca@ganaplay.com",
   "roberto.andrade@ganaplay.com",
-  "fernanda.monrroy@ganaplay.com",
+  "coordinador.marketing@ganaplay.com",
 ];
 
 /** Correos sugeridos (chips de un clic) al elegir destinatarios de la solicitud. */
@@ -56,6 +58,14 @@ export const SUGGESTED_REQUESTER_EMAILS: string[] = Array.from(
     ...Object.values(USER_DIRECTORY).filter(Boolean),
   ]),
 );
+
+/**
+ * Quiénes ocupan el puesto de Community Manager — espejo del backend.
+ * Son VARIAS desde octubre de 2026 (la CM y la Auxiliar de Marketing), así que
+ * al entrar por perfil hay que decir quién eres, como ya hacían los
+ * diseñadores: si no, las dos crearían a nombre del puesto y no del suyo.
+ */
+export const CM_USERS = ["Luisa", "Keyri"] as const;
 
 /** Lista de operadores válidos — espejo del backend. "Quota" pasó a Comercial. */
 export const OPERATOR_USERS = ["Juan"] as const;
@@ -70,7 +80,7 @@ export const OPERATOR_USERS = ["Juan"] as const;
  * alcance (no ve las solicitudes del Trafficker). Dejarlo también como
  * DIRECTIVO habría sido una puerta trasera a lo que se le acaba de restringir.
  */
-export const ADMINISTRATIVE_USERS = ["Andres", "Sebastian", "Coordinadora de Marketing"] as const;
+export const ADMINISTRATIVE_USERS = ["Andres", "Sebastian", "Fernanda"] as const;
 
 /** Ejecutivos comerciales — espejo del backend. */
 export const EJECUTIVO_USERS = ["Roberto", "Juan Saavedra", "Diego Barreto", "Juan Currea"] as const;

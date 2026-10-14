@@ -38,7 +38,7 @@ export function passwordDe(perfil: Perfil): string {
  */
 export const PERFILES: Record<Perfil, { tarjeta: string; nombre: string | null; correo: string }> = {
   admin: { tarjeta: "Trafficker", nombre: null, correo: "angel.vaca@ganaplay.com" },
-  cm: { tarjeta: "Community Manager", nombre: null, correo: "fernanda.monrroy@ganaplay.com" },
+  cm: { tarjeta: "Community Manager", nombre: "Luisa", correo: "community.manager@ganaplay.com" },
   operator: { tarjeta: "Operador", nombre: "Juan", correo: "juan.gutierrez@ganaplay.com" },
   administrative: { tarjeta: "DIRECTIVOS", nombre: "Sebastian", correo: "sebastian.calderon@ganaplay.com" },
   designer: { tarjeta: "Diseñador", nombre: "Juan David", correo: "david.gutierrez@ganaplay.com" },

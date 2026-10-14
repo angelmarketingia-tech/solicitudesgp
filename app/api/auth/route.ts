@@ -32,10 +32,14 @@ import {
  *  - AUTH_PASS_DESIGNER    → equipo de Diseño, separado del resto
  */
 
+// Todas salen del directorio, NUNCA escritas a mano: una lista copiada aquí se
+// queda vieja al dar de alta a alguien y esa persona no puede entrar por perfil
+// aunque figure en el directorio. Pasó con la Coordinación de Marketing.
 const DESIGNER_USERS = namesForRole("designer");
 const OPERATOR_USERS = namesForRole("operator");
-const ADMINISTRATIVE_USERS = ["Andres", "Sebastian"];
+const ADMINISTRATIVE_USERS = namesForRole("administrative");
 const EJECUTIVO_USERS = namesForRole("ejecutivo");
+const CM_USERS = namesForRole("cm");
 
 type AuthBody = {
   // Contraseña personal ya verificada por Firebase Auth: llega el idToken.
@@ -46,6 +50,7 @@ type AuthBody = {
   role?: Role;
   password?: string;
   designerName?: string;
+  cmName?: string;
   operatorName?: string;
   administrativeName?: string;
   ejecutivoName?: string;
@@ -90,7 +95,7 @@ export async function POST(req: Request) {
 
     const {
       idToken, email, role, password,
-      designerName, operatorName, administrativeName, ejecutivoName,
+      designerName, operatorName, administrativeName, ejecutivoName, cmName,
     }: AuthBody = await req.json();
 
     // ── Acceso con contraseña PERSONAL (Firebase Auth ya la validó) ──
@@ -152,6 +157,9 @@ export async function POST(req: Request) {
       operator:       { elegido: operatorName || "",       validos: OPERATOR_USERS },
       administrative: { elegido: administrativeName || "", validos: ADMINISTRATIVE_USERS },
       ejecutivo:      { elegido: ejecutivoName || "",      validos: EJECUTIVO_USERS },
+      // El puesto de Community Manager lo comparten la CM y la Auxiliar de
+      // Marketing: sin decir quién eres, las dos crearían a nombre del puesto.
+      cm:             { elegido: cmName || "",             validos: CM_USERS },
     };
 
     const conNombre = CON_NOMBRE[role];
@@ -170,7 +178,6 @@ export async function POST(req: Request) {
     // Perfiles de nombre único (Trafficker, CM, Comercial).
     const NOMBRE_FIJO: Partial<Record<Role, string>> = {
       admin: "Trafficker",
-      cm: "Community Manager",
       comercial: "Comercial",
     };
     const nombre = NOMBRE_FIJO[role];
