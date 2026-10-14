@@ -30,7 +30,8 @@ export const USER_DIRECTORY: Record<string, string> = {
   "Verónica": "veronica.marquez@ganaplay.com",
   "Caleb": "caleb.guevara@ganaplay.com",
   "Roberto": "roberto.andrade@ganaplay.com",
-  "Keyri": "gabriela.martinez@ganaplay.com",
+  // El del puesto: es el que recibe los avisos de entrega.
+  "Keyri": "auxiliar.marketing@ganaplay.com",
   "Juan": "juan.gutierrez@ganaplay.com",
   "Comercial": "comercial@ganaplay.com",
   "Juan Saavedra": "Juan.Saavedra@ganaplay.com",

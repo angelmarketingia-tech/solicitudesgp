@@ -74,8 +74,14 @@ const BUILTIN_DIRECTORY: DirectoryEntry[] = [
   // OJO: el rol de Gabriela llegó sin especificar. Queda con el perfil de menor
   // alcance (Promocionales y CMR) hasta que se confirme. Para cambiarlo no hace
   // falta desplegar: basta agregarla a la variable AUTH_USERS.
-  // Auxiliar de Marketing: mismo alcance que la Community Manager. Reutiliza
-  // el buzón que tenía Gabriela, que no llegó a levantar ninguna solicitud.
+  // Auxiliar de Marketing: mismo alcance que la Community Manager.
+  //
+  // Entra por DOS correos a propósito: el del puesto (auxiliar.marketing@) y el
+  // personal con el que se dio de alta. No se sabe con certeza cuál quedó
+  // activo en el correo corporativo, y dejar uno solo se arriesgaba a que no
+  // pudiera entrar. Cuando se confirme cuál es, sobra el otro.
+  // Ninguno de los dos tiene historial: no hay nada que se rompa al quitarlo.
+  { email: "auxiliar.marketing@ganaplay.com", role: "cm",            name: "Keyri" },
   { email: "gabriela.martinez@ganaplay.com", role: "cm",             name: "Keyri" },
   { email: "comercial@ganaplay.com",        role: "comercial",      name: "Comercial" },
   // Equipo comercial (septiembre de 2026). Mismo alcance que Roberto:
