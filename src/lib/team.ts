@@ -81,6 +81,8 @@ const BUILTIN_DIRECTORY: DirectoryEntry[] = [
   { email: "juan.gutierrez@ganaplay.com",   role: "operator",       name: "Juan" },
   // Dirección: ven todo el trabajo de la empresa, sin poder de borrado.
   { email: "sebastian.calderon@ganaplay.com", role: "administrative", name: "Sebastian" },
+  // Coordinación de Marketing: ve todo el trabajo de la empresa, como Dirección.
+  { email: "coordinador.marketing@ganaplay.com", role: "administrative", name: "Coordinadora de Marketing" },
   { email: "andres.clavijo@ganaplay.com",     role: "administrative", name: "Andres" },
 ];
 

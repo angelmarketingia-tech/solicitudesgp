@@ -152,6 +152,24 @@ function ficha(it: ContentItem, indice: number, total: number) {
       + `</div>`
     : `<div style="font-size:11.5px;color:${APAGADO};font-style:italic;padding:8px 0;">Sin guion todavía.</div>`;
 
+  // Referencias y documentos de apoyo. Van como ENLACES, nunca incrustados: el
+  // documento se manda por correo y por WhatsApp, y meter dentro un brief en
+  // PDF o las imágenes lo volvería imposible de enviar.
+  const enlacesAdjuntos = [
+    ...(it.referenceImages || []).map((url, i) =>
+      `<a href="${esc(url)}" style="color:${VERDE};">Imagen de referencia ${i + 1}</a>`),
+    ...(it.referenceFiles || []).map(a => {
+      const etiqueta = a.type === "link" ? a.name : `${a.name} (${a.type.toUpperCase()})`;
+      return `<a href="${esc(a.url)}" style="color:${VERDE};">${esc(etiqueta)}</a>`;
+    }),
+  ];
+  const adjuntos = enlacesAdjuntos.length === 0 ? "" :
+    `<div style="margin-top:10px;font-size:11.5px;line-height:1.8;color:${TEXTO};">`
+    + `<span style="font-size:9.5px;font-weight:700;color:${APAGADO};letter-spacing:.1em;`
+    + `text-transform:uppercase;">Referencias y documentos</span><br>`
+    + enlacesAdjuntos.join(" · ")
+    + `</div>`;
+
   return `<table style="width:100%;border-collapse:collapse;margin-bottom:18px;page-break-inside:avoid;`
     + `border:1px solid ${BORDE};background:${PAPEL};"><tr>`
     // Columna izquierda: la fecha, que es el ancla visual de la ficha.
@@ -170,6 +188,7 @@ function ficha(it: ContentItem, indice: number, total: number) {
     + filaDato("Fechas", fechasSecundarias)
     + `</table>`
     + guion
+    + adjuntos
     + `</td></tr></table>`;
 }
 

@@ -62,12 +62,31 @@ export type Influencer = {
   handle?: string;     // @usuario (opcional)
 };
 
+/**
+ * Documento de apoyo (guion en Word, brief en PDF) o enlace de referencia.
+ *
+ * El archivo vive en Cloud Storage y aquí queda solo su URL. NUNCA se guarda
+ * el archivo dentro del documento: hacerlo fue lo que disparó la factura de
+ * Google en el tablero de diseño, porque el módulo se carga entero y cada
+ * persona que lo abría se descargaba los adjuntos de todas las tarjetas.
+ */
+export type ContentAttachment = {
+  name: string;
+  url: string;
+  /** "pdf" | "doc" | "docx" para archivos; "link" para un enlace pegado. */
+  type: string;
+};
+
 export type ContentItem = {
   id: string;
   influencerId: string;
   title: string;
   date: string;               // "YYYY-MM-DD" — día del calendario
   contentStatus: ContentStatus;
+  /** Imágenes de referencia (URL de Storage). */
+  referenceImages?: string[];
+  /** PDF y Word de apoyo, y enlaces de referencia. */
+  referenceFiles?: ContentAttachment[];
   pillars: string[];
   channel: string;
   contentFormat: string;
@@ -129,6 +148,8 @@ export function itemFromDoc(id: string, data: Record<string, unknown>): ContentI
     channel: String(data.channel || ""),
     contentFormat: String(data.contentFormat || ""),
     ideas: String(data.ideas || ""),
+    referenceImages: Array.isArray(data.referenceImages) ? (data.referenceImages as string[]) : [],
+    referenceFiles: Array.isArray(data.referenceFiles) ? (data.referenceFiles as ContentAttachment[]) : [],
     requestDate: data.requestDate ? String(data.requestDate) : undefined,
     deliveryDate: data.deliveryDate ? String(data.deliveryDate) : undefined,
   };
@@ -183,6 +204,10 @@ export async function createContentItem(
     channel: data.channel,
     contentFormat: data.contentFormat,
     ideas: data.ideas,
+    // Solo se escriben si traen algo: un array vacío ocuparía sitio en cada
+    // tarjeta sin decir nada.
+    ...(data.referenceImages?.length ? { referenceImages: data.referenceImages } : {}),
+    ...(data.referenceFiles?.length ? { referenceFiles: data.referenceFiles } : {}),
     ...(data.requestDate ? { requestDate: data.requestDate } : {}),
     createdAt: serverTimestamp(),
     updatedAt: serverTimestamp(),
@@ -203,6 +228,8 @@ export async function updateContentItem(
   if (data.channel !== undefined) patch.channel = data.channel;
   if (data.contentFormat !== undefined) patch.contentFormat = data.contentFormat;
   if (data.ideas !== undefined) patch.ideas = data.ideas;
+  if (data.referenceImages !== undefined) patch.referenceImages = data.referenceImages;
+  if (data.referenceFiles !== undefined) patch.referenceFiles = data.referenceFiles;
   if (data.requestDate !== undefined) patch.requestDate = data.requestDate;
   if (data.deliveryDate !== undefined) patch.deliveryDate = data.deliveryDate;
   await updateDoc(doc(db, "requests", itemId), patch);

@@ -23,6 +23,7 @@ import {
   monthGrid, monthLabel, influencerFromDoc, itemFromDoc,
 } from "@/lib/influencer";
 import { descargarWord, imprimirPdf } from "@/lib/influencer-export";
+import AdjuntosContenido from "../../AdjuntosContenido";
 
 export default function PublicInfluencerPage({ params }: { params: Promise<{ code: string }> }) {
   const { code } = use(params);
@@ -268,6 +269,18 @@ export default function PublicInfluencerPage({ params }: { params: Promise<{ cod
               {detail.ideas && (
                 <Row label="Ideas / instrucciones">
                   <p style={{ margin: 0, fontSize: "13px", lineHeight: 1.6, color: "var(--text-primary)", whiteSpace: "pre-wrap" }}>{detail.ideas}</p>
+                </Row>
+              )}
+
+              {/* Lo que haga falta para producir el contenido: guion, brief,
+                  referencias. El mismo componente que usa el panel, para que
+                  lo que ve el influencer sea exactamente lo que se cargó. */}
+              {((detail.referenceImages?.length || 0) + (detail.referenceFiles?.length || 0)) > 0 && (
+                <Row label="Referencias y documentos">
+                  <AdjuntosContenido
+                    imagenes={detail.referenceImages || []}
+                    archivos={detail.referenceFiles || []}
+                    soloLectura />
                 </Row>
               )}
             </div>

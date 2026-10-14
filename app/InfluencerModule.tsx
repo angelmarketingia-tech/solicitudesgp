@@ -27,9 +27,10 @@ import {
 import { db } from "@/lib/firebase";
 import { publicLink, publicLinkAlterno } from "@/lib/public-url";
 import { descargarWord, imprimirPdf } from "@/lib/influencer-export";
+import AdjuntosContenido from "./AdjuntosContenido";
 import { collection, onSnapshot, query, where } from "firebase/firestore";
 import {
-  Influencer, ContentItem, ContentStatus,
+  Influencer, ContentItem, ContentAttachment, ContentStatus,
   CONTENT_STATUSES, STATUS_STYLE, CONTENT_PILLARS, PILLAR_STYLE,
   CONTENT_CHANNELS, CONTENT_FORMATS, DOW_ES,
   monthGrid, monthLabel, influencerFromDoc, itemFromDoc,
@@ -43,6 +44,7 @@ type Props = { role: string | null; userName: string; addToast: Toast };
 const EMPTY_DRAFT = {
   title: "", date: "", contentStatus: "Sin empezar" as ContentStatus,
   pillars: [] as string[], channel: "", contentFormat: "", ideas: "",
+  referenceImages: [] as string[], referenceFiles: [] as ContentAttachment[],
   requestDate: "", deliveryDate: "",
 };
 
@@ -203,7 +205,10 @@ export default function InfluencerModule({ role, addToast }: Props) {
     setDraft({
       title: it.title, date: it.date, contentStatus: it.contentStatus,
       pillars: [...it.pillars], channel: it.channel, contentFormat: it.contentFormat,
-      ideas: it.ideas, requestDate: it.requestDate || "", deliveryDate: it.deliveryDate || "",
+      ideas: it.ideas,
+      referenceImages: [...(it.referenceImages || [])],
+      referenceFiles: [...(it.referenceFiles || [])],
+      requestDate: it.requestDate || "", deliveryDate: it.deliveryDate || "",
     });
     setItemModalOpen(true);
   };
@@ -488,6 +493,15 @@ export default function InfluencerModule({ role, addToast }: Props) {
               <textarea rows={4} value={draft.ideas} onChange={e => setDraft(d => ({ ...d, ideas: e.target.value }))}
                 placeholder="Guion, referencias, copy sugerido, hashtags…" />
             </div>
+
+            {/* El guion en Word, el brief en PDF o el video de referencia viajan
+                con la tarjeta y le llegan al influencer por su enlace. */}
+            <AdjuntosContenido
+              imagenes={draft.referenceImages}
+              archivos={draft.referenceFiles}
+              addToast={addToast}
+              onChange={({ imagenes, archivos }) =>
+                setDraft(d => ({ ...d, referenceImages: imagenes, referenceFiles: archivos }))} />
 
             <div style={{ display: "flex", gap: "10px", marginTop: "6px" }}>
               {editingItemId && (

@@ -118,3 +118,22 @@ export async function borrarCarpetaCmrPorNombre(nombre: string) {
     if (String(d.data().name || "") === nombre) await deleteDoc(d.ref).catch(() => { /* */ });
   }
 }
+
+/**
+ * Código del enlace público de un influencer, por su nombre.
+ *
+ * La prueba necesita abrir ese enlace como lo abriría el influencer (sin
+ * cuenta). Leerlo del portapapeles no sirve: Playwright no tiene permiso de
+ * lectura por defecto y el fallo se confundiría con un fallo de la función.
+ */
+export async function shareCodeDeInfluencer(nombre: string): Promise<string | null> {
+  const { db } = firebase();
+  const snap = await getDocs(query(collection(db, "requests"), where("board", "==", "influencer")));
+  for (const d of snap.docs) {
+    const datos = d.data();
+    if (String(datos.influencerName || datos.title || "") === nombre) {
+      return String(datos.shareCode || "") || null;
+    }
+  }
+  return null;
+}

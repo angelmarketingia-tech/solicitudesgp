@@ -35,6 +35,7 @@ export const USER_DIRECTORY: Record<string, string> = {
   "Diego Barreto": "diego.barreto@ganaplay.com",
   "Juan Currea": "juan.currea@ganaplay.com",
   "Sebastian": "sebastian.calderon@ganaplay.com",
+  "Coordinadora de Marketing": "coordinador.marketing@ganaplay.com",
   "Andres": "andres.clavijo@ganaplay.com",
 };
 
@@ -60,7 +61,8 @@ export const SUGGESTED_REQUESTER_EMAILS: string[] = Array.from(
 export const OPERATOR_USERS = ["Juan"] as const;
 
 /**
- * Lista de DIRECTIVOS válidos (Andres, Sebastian) — espejo del backend.
+ * Lista de DIRECTIVOS válidos (Andres, Sebastian y la Coordinación de
+ * Marketing) — espejo del backend.
  * Internamente el rol se sigue llamando "administrative" por compatibilidad
  * con datos previos; el label visible en UI es "DIRECTIVOS".
  *
@@ -68,7 +70,7 @@ export const OPERATOR_USERS = ["Juan"] as const;
  * alcance (no ve las solicitudes del Trafficker). Dejarlo también como
  * DIRECTIVO habría sido una puerta trasera a lo que se le acaba de restringir.
  */
-export const ADMINISTRATIVE_USERS = ["Andres", "Sebastian"] as const;
+export const ADMINISTRATIVE_USERS = ["Andres", "Sebastian", "Coordinadora de Marketing"] as const;
 
 /** Ejecutivos comerciales — espejo del backend. */
 export const EJECUTIVO_USERS = ["Roberto", "Juan Saavedra", "Diego Barreto", "Juan Currea"] as const;
