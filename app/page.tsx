@@ -2967,7 +2967,7 @@ export default function GanaPlayMainApp() {
   // Si Comercial traía guardada una pestaña que ya no le corresponde (o cambió
   // de perfil en el mismo navegador), se le lleva a la suya.
   useEffect(() => {
-    if (esComercial && !['Promocionales', 'CMR', 'Tabla Principal'].includes(activeTab)) setActiveTab('Promocionales');
+    if (esComercial && !['Promocionales', 'CMR', 'Tabla Principal', 'Entregas'].includes(activeTab)) setActiveTab('Promocionales');
     // El Ejecutivo Comercial no tiene Redes Sociales, Influencers ni Centro de
     // Diseño: si traía una guardada, se quedaría mirando una pantalla vacía.
     else if (esEjecutivo && ['Redes Sociales', 'Contenido Influencers', 'Equipo Diseño'].includes(activeTab)) {
@@ -2981,6 +2981,85 @@ export default function GanaPlayMainApp() {
     background: isActive ? 'var(--accent-color)' : 'transparent',
     fontSize: '13px', transition: 'all 0.18s ease', whiteSpace: 'nowrap',
   });
+
+  /**
+   * Historial de entregas: las solicitudes que YA tienen piezas subidas por
+   * Diseño, con los archivos a mano y un acceso a la ficha completa.
+   *
+   * Lo comparten la Community Manager (dentro de Redes Sociales) y el perfil
+   * Comercial (en su propia pestaña). Es la misma pregunta —«¿qué me
+   * entregaron?»— y tiene que responderse igual en los dos sitios: cuando era
+   * un bloque suelto, solo la CM la tenía contestada.
+   */
+  const listaDeEntregas = (entregas: RequestType[], subtitulo: string, vacio: string) => (
+    <div className="card" style={{ padding: '16px' }}>
+      <h3 style={{ margin: '0 0 4px', fontSize: '15px', color: 'var(--accent-dark)', display: 'flex', alignItems: 'center', gap: '8px' }}>
+        <CheckCircle2 size={16} /> Mis entregas
+      </h3>
+      <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '14px' }}>
+        {subtitulo}
+      </div>
+      {entregas.length === 0 && (
+        <div style={{ textAlign: 'center', padding: '36px', color: 'var(--text-muted)', fontSize: '13px' }}>
+          {vacio}
+        </div>
+      )}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+        {entregas.map(req => (
+          <div key={req.id} className="card" style={{ padding: '14px', borderLeft: `4px solid ${STATUS_TEXT_COLORS[req.status] || 'var(--accent-color)'}` }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '12px', flexWrap: 'wrap' }}>
+              <div style={{ minWidth: 0 }}>
+                <div style={{ fontSize: '11px', color: 'var(--text-secondary)', marginBottom: '3px' }}>
+                  {req.id} • Entrega {req.deliveryDate || 'sin fecha'}{req.assignedTo ? ` • ${req.assignedTo}` : ''}
+                </div>
+                <div style={{ fontSize: '14px', fontWeight: 700, color: 'var(--text-primary)' }}>{req.title}</div>
+                <div style={{ marginTop: '6px', display: 'flex', gap: '6px', flexWrap: 'wrap', alignItems: 'center' }}>
+                  <span className="badge" style={{ background: STATUS_COLORS[req.status], color: STATUS_TEXT_COLORS[req.status], fontSize: '10px' }}>{req.status}</span>
+                  {req.requestKind && <span className="badge" style={{ background: KIND_CONFIG[req.requestKind].bg, color: KIND_CONFIG[req.requestKind].text, fontSize: '10px' }}>{KIND_CONFIG[req.requestKind].emoji} {req.requestKind}</span>}
+                  <span style={{ fontSize: '11px', color: 'var(--text-secondary)' }}><ImageIcon size={11} style={{ display: 'inline', marginRight: '3px' }} />{req.creatives.length} pieza{req.creatives.length === 1 ? '' : 's'}</span>
+                </div>
+              </div>
+              <button className="btn" style={{ padding: '8px 14px', fontSize: '12px' }}
+                onClick={() => { setSelectedReq(req); setModalOpen(true); }}>
+                Ver solicitud
+              </button>
+            </div>
+            <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginTop: '12px' }}>
+              {req.creatives.map((c, i) => {
+                const tipo = mediaKindOf(c.type, c.url);
+                return (
+                  <div key={creativeKey(c)} style={{ display: 'flex', alignItems: 'center', gap: '8px', border: '1px solid var(--border-color)', borderRadius: '10px', padding: '6px 8px', background: 'var(--surface-1)', maxWidth: '100%' }}>
+                    {tipo === 'image' || tipo === 'animated'
+                      // eslint-disable-next-line @next/next/no-img-element
+                      ? <img src={c.url} alt={c.type} style={{ width: '40px', height: '40px', objectFit: 'cover', borderRadius: '6px' }} />
+                      : <div style={{ width: '40px', height: '40px', borderRadius: '6px', background: 'var(--surface-2)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>{tipo === 'video' ? <Play size={16} /> : <FileText size={16} />}</div>}
+                    <span style={{ fontSize: '11px', color: 'var(--text-primary)', maxWidth: '160px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.type || `Pieza ${i + 1}`}</span>
+                    <button className="btn-secondary" title="Descargar"
+                      style={{ padding: '6px 8px', borderRadius: '8px', cursor: 'pointer' }}
+                      onClick={() => handleDownload(c, req.id, req.dimensions?.[0] || 'General')}>
+                      <Download size={13} />
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+
+  /**
+   * Lo entregado de las solicitudes que ve este perfil. `visibles` ya viene
+   * filtrado (Comercial solo tiene las suyas), así que aquí basta con quedarse
+   * con las que tienen piezas.
+   */
+  const misEntregas = useMemo(
+    () => visibles
+      .filter(r => (r.creatives || []).length > 0)
+      .sort((a, b) => (b.deliveryDate || '').localeCompare(a.deliveryDate || '')),
+    [visibles],
+  );
 
   // ════════════════════ PANTALLA DE LOGIN ════════════════════
   if (!role) {
@@ -3320,9 +3399,15 @@ export default function GanaPlayMainApp() {
           {/* El perfil Comercial no trabaja el tablero de todo el equipo: solo
               sus dos carpetas (Promocionales y CMR) y las solicitudes que él
               mismo levantó, que ve en su propia pestaña. */}
-          {esComercial && (
+          {esComercial && <>
             <div style={navItemStyle(activeTab === 'Tabla Principal')} onClick={() => setActiveTab('Tabla Principal')}><List size={15} /> Mis solicitudes</div>
-          )}
+            <div style={navItemStyle(activeTab === 'Entregas')} onClick={() => setActiveTab('Entregas')}>
+              <CheckCircle2 size={15} /> Entregas
+              {misEntregas.length > 0 && (
+                <span style={{ fontSize: '11px', fontWeight: 700, opacity: 0.75 }}>({misEntregas.length})</span>
+              )}
+            </div>
+          </>}
           {!esComercial && <>
           <div style={navItemStyle(activeTab === 'Tablero Kanban')} onClick={() => setActiveTab('Tablero Kanban')}><Calendar size={15} /> Planeación</div>
           <div style={navItemStyle(activeTab === 'Calendario Entrega')} onClick={() => setActiveTab('Calendario Entrega')}><Layout size={15} /> Por estado</div>
@@ -4173,66 +4258,22 @@ export default function GanaPlayMainApp() {
                 <SocialMediaTab role={role} userName={userName} addToast={addToast} />
               )}
 
-              {redesVista === 'Entregas' && (
-                <div className="card" style={{ padding: '16px' }}>
-                  <h3 style={{ margin: '0 0 4px', fontSize: '15px', color: 'var(--accent-dark)', display: 'flex', alignItems: 'center', gap: '8px' }}>
-                    <CheckCircle2 size={16} /> Mis entregas
-                  </h3>
-                  <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '14px' }}>
-                    Las piezas que Diseño ha entregado de las solicitudes que tú pediste.
-                  </div>
-                  {entregas.length === 0 && (
-                    <div style={{ textAlign: 'center', padding: '36px', color: 'var(--text-muted)', fontSize: '13px' }}>
-                      Todavía no hay entregas de tus solicitudes.
-                    </div>
-                  )}
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-                    {entregas.map(req => (
-                      <div key={req.id} className="card" style={{ padding: '14px', borderLeft: `4px solid ${STATUS_TEXT_COLORS[req.status] || 'var(--accent-color)'}` }}>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '12px', flexWrap: 'wrap' }}>
-                          <div style={{ minWidth: 0 }}>
-                            <div style={{ fontSize: '11px', color: 'var(--text-secondary)', marginBottom: '3px' }}>
-                              {req.id} • Entrega {req.deliveryDate || 'sin fecha'}{req.assignedTo ? ` • ${req.assignedTo}` : ''}
-                            </div>
-                            <div style={{ fontSize: '14px', fontWeight: 700, color: 'var(--text-primary)' }}>{req.title}</div>
-                            <div style={{ marginTop: '6px', display: 'flex', gap: '6px', flexWrap: 'wrap', alignItems: 'center' }}>
-                              <span className="badge" style={{ background: STATUS_COLORS[req.status], color: STATUS_TEXT_COLORS[req.status], fontSize: '10px' }}>{req.status}</span>
-                              {req.requestKind && <span className="badge" style={{ background: KIND_CONFIG[req.requestKind].bg, color: KIND_CONFIG[req.requestKind].text, fontSize: '10px' }}>{KIND_CONFIG[req.requestKind].emoji} {req.requestKind}</span>}
-                              <span style={{ fontSize: '11px', color: 'var(--text-secondary)' }}><ImageIcon size={11} style={{ display: 'inline', marginRight: '3px' }} />{req.creatives.length} pieza{req.creatives.length === 1 ? '' : 's'}</span>
-                            </div>
-                          </div>
-                          <button className="btn" style={{ padding: '8px 14px', fontSize: '12px' }}
-                            onClick={() => { setSelectedReq(req); setModalOpen(true); }}>
-                            Ver solicitud
-                          </button>
-                        </div>
-                        <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginTop: '12px' }}>
-                          {req.creatives.map((c, i) => {
-                            const tipo = mediaKindOf(c.type, c.url);
-                            return (
-                              <div key={creativeKey(c)} style={{ display: 'flex', alignItems: 'center', gap: '8px', border: '1px solid var(--border-color)', borderRadius: '10px', padding: '6px 8px', background: 'var(--surface-1)', maxWidth: '100%' }}>
-                                {tipo === 'image' || tipo === 'animated'
-                                  // eslint-disable-next-line @next/next/no-img-element
-                                  ? <img src={c.url} alt={c.type} style={{ width: '40px', height: '40px', objectFit: 'cover', borderRadius: '6px' }} />
-                                  : <div style={{ width: '40px', height: '40px', borderRadius: '6px', background: 'var(--surface-2)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>{tipo === 'video' ? <Play size={16} /> : <FileText size={16} />}</div>}
-                                <span style={{ fontSize: '11px', color: 'var(--text-primary)', maxWidth: '160px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.type || `Pieza ${i + 1}`}</span>
-                                <button className="btn-secondary" title="Descargar"
-                                  style={{ padding: '6px 8px', borderRadius: '8px', cursor: 'pointer' }}
-                                  onClick={() => handleDownload(c, req.id, req.dimensions?.[0] || 'General')}>
-                                  <Download size={13} />
-                                </button>
-                              </div>
-                            );
-                          })}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
+              {redesVista === 'Entregas' && listaDeEntregas(
+                entregas,
+                'Las piezas que Diseño ha entregado de las solicitudes que tú pediste.',
+                'Todavía no hay entregas de tus solicitudes.',
               )}
             </div>
           );
         })()}
+
+        {/* Comercial: su historial de entregas. Mismo listado que el de la CM,
+            pero sobre `visibles`, que para este perfil ya son solo las suyas. */}
+        {activeTab === 'Entregas' && esComercial && listaDeEntregas(
+          misEntregas,
+          'Todo lo que Diseño te ha entregado, de lo más reciente a lo más antiguo. Puedes descargar cada pieza desde aquí.',
+          'Todavía no te han entregado nada. Cuando Diseño suba una pieza de tus solicitudes, aparecerá aquí.',
+        )}
 
         {activeTab === 'Contenido Influencers' && verInfluencers && (
           <InfluencerModule role={role} userName={userName} addToast={addToast} />

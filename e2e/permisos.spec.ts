@@ -41,7 +41,7 @@ const MATRIZ: Record<Perfil, { ve: string[]; noVe: string[] }> = {
     // Comercial trabaja sus dos carpetas y las solicitudes que levanta él.
     // "Mis solicitudes" es su tabla: la misma vista del resto, pero filtrada
     // por autoría. No tiene el tablero del equipo ni el historial general.
-    ve: ["Mis solicitudes", "Promocionales", "CMR"],
+    ve: ["Mis solicitudes", "Entregas", "Promocionales", "CMR"],
     noVe: ["Planeación", "Por estado", "Pendientes", "Historial", "Redes Sociales", "Centro de Diseño", "Contenido Influencers"],
   },
   designer: {
@@ -133,6 +133,13 @@ test.describe("Comercial: solicitudes propias, con el mismo formulario", () => {
       .locator(".form-group", { has: page.getByText("Área solicitante", { exact: true }) })
       .locator("select");
     await expect(area).toHaveValue("CMR");
+  });
+
+  test("tiene su historial de entregas", async ({ page }) => {
+    test.skip(!sesionDisponible("comercial"), "Sin sesión de comercial");
+    await abrirTablero(page);
+    await page.getByTestId("menu-principal").getByText("Entregas", { exact: false }).click();
+    await expect(page.getByRole("heading", { name: /Mis entregas/i })).toBeVisible();
   });
 
   test("su solicitud no trae ningún correo preseleccionado", async ({ page }) => {
