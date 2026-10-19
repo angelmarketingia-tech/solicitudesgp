@@ -197,6 +197,9 @@ const PROFILE_DEFAULTS: Record<string, { area: string; requesterName: string }> 
   operator:       { area: "Pauta",          requesterName: "" },
   administrative: { area: "Pauta",          requesterName: "" },
   ejecutivo:      { area: "Pauta",          requesterName: "" },
+  // Comercial trabaja CMR: su solicitud nace ya con esa área marcada. El campo
+  // sigue siendo editable (el formulario es el mismo para todos).
+  comercial:      { area: "CMR",            requesterName: "" },
 };
 
 // ─── Perfiles del sistema ───
@@ -409,6 +412,16 @@ export default function GanaPlayMainApp() {
     setTimeout(() => setToasts(prev => prev.filter(t => t.id !== id)), 4500);
   }, []);
 
+  // Correo de quien está usando la app: el que escribió al entrar, o el que le
+  // corresponde por nombre en el directorio (quien entró por el menú de roles).
+  // Va ANTES de `visibles` porque el perfil Comercial filtra el tablero por
+  // autoría, y la autoría se decide por correo.
+  const miCorreo = useMemo(() => {
+    let guardado = "";
+    try { guardado = sessionStorage.getItem("gp_email") || localStorage.getItem("gp_email") || ""; } catch { /* SSR */ }
+    return guardado || emailForUser(userName) || (role === 'admin' ? DEFAULT_TRAFFICKER_EMAIL : "");
+  }, [userName, role]);
+
   const [requests, setRequests] = useState<RequestType[]>([]);
   // `requests` es SIEMPRE la lista completa: de ahí sale el número de la
   // siguiente solicitud, y filtrarla provocaría IDs repetidos.
@@ -417,10 +430,19 @@ export default function GanaPlayMainApp() {
   const esComercial = role === 'comercial';
   const esEjecutivo = role === 'ejecutivo';
   const sinLoDelTrafficker = role === 'operator' || role === 'ejecutivo';
-  const visibles = useMemo(
-    () => (sinLoDelTrafficker ? requests.filter(r => !esSolicitudDelTrafficker(r)) : requests),
-    [requests, sinLoDelTrafficker],
-  );
+  /**
+   * Comercial solo ve LO QUE ÉL PIDIÓ.
+   *
+   * Es el perfil de menor alcance (Promocionales, CMR y sus propias
+   * solicitudes): el tablero completo no es asunto suyo. La autoría se decide
+   * con `esCreadorDe`, la misma regla que usa el servidor para autorizar el
+   * borrado, así que no hay dos criterios distintos de "esto es mío".
+   */
+  const soloLoPropio = esComercial;
+  const visibles = useMemo(() => {
+    if (soloLoPropio) return requests.filter(r => esCreadorDe(r, { email: miCorreo, nombre: userName }));
+    return sinLoDelTrafficker ? requests.filter(r => !esSolicitudDelTrafficker(r)) : requests;
+  }, [requests, sinLoDelTrafficker, soloLoPropio, miCorreo, userName]);
 
   /**
    * Perfiles que trabajan el tablero de solicitudes (no Diseño, no Comercial).
@@ -1077,8 +1099,15 @@ export default function GanaPlayMainApp() {
     const def = role ? PROFILE_DEFAULTS[role] : undefined;
     if (def?.area) { setArea(def.area); setAreaOtra(false); }
     setRequesterName(def?.requesterName || userName);
-    const own = emailForUser(userName) || (role === 'admin' ? DEFAULT_TRAFFICKER_EMAIL : '');
-    setRequesterEmails(destinatariosIniciales(own));
+    // Comercial arranca SIN destinatarios: su correo es compartido y la CM no
+    // coordina lo suyo, así que preseleccionarlos mandaba la entrega a gente
+    // que no la había pedido. Si quieren el aviso, lo agregan a mano.
+    if (esComercial) {
+      setRequesterEmails([]);
+    } else {
+      const own = emailForUser(userName) || (role === 'admin' ? DEFAULT_TRAFFICKER_EMAIL : '');
+      setRequesterEmails(destinatariosIniciales(own));
+    }
     setCreateModalOpen(true);
   };
   const openEditRequest = (req: RequestType) => {
@@ -2232,7 +2261,7 @@ export default function GanaPlayMainApp() {
       const notifs = firestoreNotifs.filter(n => n.requestId === req.id);
       await Promise.all(notifs.map(n => deleteDoc(doc(db, "notifications", n.id)).catch(() => undefined)));
     } catch { /* no bloquea */ }
-  }, [userName, firestoreNotifs]);
+  }, [userName, miCorreo, firestoreNotifs]);
 
   const handleConfirmPermanentDelete = async () => {
     if (!deleteModalOpen) return;
@@ -2730,14 +2759,6 @@ export default function GanaPlayMainApp() {
     }
   }, [requests, loadingData, addToast, role]);
 
-  // Correo de quien está usando la app: el que escribió al entrar, o el que le
-  // corresponde por nombre en el directorio (quien entró por el menú de roles).
-  const miCorreo = useMemo(() => {
-    let guardado = "";
-    try { guardado = sessionStorage.getItem("gp_email") || localStorage.getItem("gp_email") || ""; } catch { /* SSR */ }
-    return guardado || emailForUser(userName) || (role === 'admin' ? DEFAULT_TRAFFICKER_EMAIL : "");
-  }, [userName, role]);
-
   /**
    * Anota un trabajo que NUNCA entró por el tablero.
    *
@@ -2925,11 +2946,16 @@ export default function GanaPlayMainApp() {
     // se filtran, el Operador y el Ejecutivo Comercial leerían por aquí justo
     // lo que no deben ver.
     const idsVisibles = new Set(visibles.map(r => r.id));
-    const notifsPermitidas = sinLoDelTrafficker
+    // Comercial es el caso estricto: la campanita solo le habla de SUS
+    // solicitudes. Sin esto le entraban los avisos de todo el tablero (las
+    // "99+" de la cabecera), que es justo lo que no debe ver.
+    const notifsPermitidas = soloLoPropio
+      ? firestoreNotifs.filter(n => n.requestId && idsVisibles.has(n.requestId))
+      : sinLoDelTrafficker
       ? firestoreNotifs.filter(n => !n.requestId || idsVisibles.has(n.requestId))
       : firestoreNotifs;
     return [...myAlerts, ...notifsPermitidas];
-  }, [deadlineAlerts, firestoreNotifs, gestionaSolicitudes, sinLoDelTrafficker, visibles]);
+  }, [deadlineAlerts, firestoreNotifs, gestionaSolicitudes, sinLoDelTrafficker, soloLoPropio, visibles]);
 
   const unreadCount = useMemo(() => allNotifications.filter(n => !n.read).length, [allNotifications]);
 
@@ -2941,7 +2967,7 @@ export default function GanaPlayMainApp() {
   // Si Comercial traía guardada una pestaña que ya no le corresponde (o cambió
   // de perfil en el mismo navegador), se le lleva a la suya.
   useEffect(() => {
-    if (esComercial && !['Promocionales', 'CMR'].includes(activeTab)) setActiveTab('Promocionales');
+    if (esComercial && !['Promocionales', 'CMR', 'Tabla Principal'].includes(activeTab)) setActiveTab('Promocionales');
     // El Ejecutivo Comercial no tiene Redes Sociales, Influencers ni Centro de
     // Diseño: si traía una guardada, se quedaría mirando una pantalla vacía.
     else if (esEjecutivo && ['Redes Sociales', 'Contenido Influencers', 'Equipo Diseño'].includes(activeTab)) {
@@ -3291,8 +3317,12 @@ export default function GanaPlayMainApp() {
             aparecen en otras partes de la pantalla (p. ej. "Pendientes"
             también es una estadística del Centro de Diseño). */}
         <div data-testid="menu-principal" style={{ display: 'flex', gap: '6px', marginBottom: '22px', borderBottom: '1px solid var(--border-color)', paddingBottom: '14px', flexWrap: 'wrap' }}>
-          {/* El perfil Comercial no trabaja con el tablero de solicitudes:
-              solo con sus dos carpetas (Promocionales y CMR). */}
+          {/* El perfil Comercial no trabaja el tablero de todo el equipo: solo
+              sus dos carpetas (Promocionales y CMR) y las solicitudes que él
+              mismo levantó, que ve en su propia pestaña. */}
+          {esComercial && (
+            <div style={navItemStyle(activeTab === 'Tabla Principal')} onClick={() => setActiveTab('Tabla Principal')}><List size={15} /> Mis solicitudes</div>
+          )}
           {!esComercial && <>
           <div style={navItemStyle(activeTab === 'Tablero Kanban')} onClick={() => setActiveTab('Tablero Kanban')}><Calendar size={15} /> Planeación</div>
           <div style={navItemStyle(activeTab === 'Calendario Entrega')} onClick={() => setActiveTab('Calendario Entrega')}><Layout size={15} /> Por estado</div>
@@ -3993,6 +4023,18 @@ export default function GanaPlayMainApp() {
           const gridCols = '24px minmax(220px,2fr) 60px 110px 100px 90px 130px 80px 110px';
           return (
             <div>
+              {/* Comercial ve aquí SOLO lo suyo: conviene decirlo, o la tabla
+                  medio vacía se lee como un fallo de carga. */}
+              {esComercial && (
+                <div style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '10px 14px', marginBottom: '16px', borderRadius: '10px', background: 'var(--surface-1)', border: '1px solid var(--border-color)' }}>
+                  <List size={15} color="var(--accent-color)" style={{ flexShrink: 0 }} />
+                  <span style={{ fontSize: '12.5px', color: 'var(--text-secondary)', lineHeight: 1.5 }}>
+                    Aquí están <strong>las solicitudes que tú levantaste</strong>, con su estado y sus
+                    entregables. Para pedir una nueva usa <strong>«+ Nueva»</strong> arriba: es el mismo
+                    formulario del resto del equipo y sale marcada como <strong>CMR</strong>.
+                  </span>
+                </div>
+              )}
               {tableGroups.map(group => {
                 const groupRows = visibles.filter(r => group.statuses.includes(r.status));
                 return (
@@ -4062,7 +4104,7 @@ export default function GanaPlayMainApp() {
                           </div>
                         );
                       })}
-                      {gestionaSolicitudes && (
+                      {(gestionaSolicitudes || esComercial) && (
                         <div style={{ display: 'grid', gridTemplateColumns: gridCols, minWidth: '930px', cursor: 'pointer' }} onClick={openCreateRequest}>
                           <div style={cell()} />
                           <div style={{ ...cell({ color: 'var(--accent-color)', gap: '6px', fontWeight: 600 }), gridColumn: 'span 8' }}>
@@ -4391,9 +4433,13 @@ export default function GanaPlayMainApp() {
 
               <div className="form-group">
                 <label className="label">
-                  Correos del solicitante *
+                  {/* En Comercial la lista nace vacía: marcarla con asterisco
+                      haría pensar que no se puede guardar sin rellenarla. */}
+                  {esComercial ? 'Correos del solicitante' : 'Correos del solicitante *'}
                   <span style={{ marginLeft: '8px', fontSize: '11px', fontWeight: 400, color: 'var(--text-muted)' }}>
-                    La entrega llega a TODOS ({requesterEmails.length})
+                    {esComercial && requesterEmails.length === 0
+                      ? 'Opcional — agrega a quien deba recibir la entrega'
+                      : `La entrega llega a TODOS (${requesterEmails.length})`}
                   </span>
                 </label>
 

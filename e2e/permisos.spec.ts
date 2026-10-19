@@ -38,9 +38,11 @@ const MATRIZ: Record<Perfil, { ve: string[]; noVe: string[] }> = {
     noVe: ["Redes Sociales", "Centro de Diseño", "Contenido Influencers"],
   },
   comercial: {
-    // Comercial solo trabaja con sus dos carpetas.
-    ve: ["Promocionales", "CMR"],
-    noVe: ["Planeación", "Por estado", "Pendientes", "Historial", "Tabla", "Redes Sociales", "Centro de Diseño", "Contenido Influencers"],
+    // Comercial trabaja sus dos carpetas y las solicitudes que levanta él.
+    // "Mis solicitudes" es su tabla: la misma vista del resto, pero filtrada
+    // por autoría. No tiene el tablero del equipo ni el historial general.
+    ve: ["Mis solicitudes", "Promocionales", "CMR"],
+    noVe: ["Planeación", "Por estado", "Pendientes", "Historial", "Redes Sociales", "Centro de Diseño", "Contenido Influencers"],
   },
   designer: {
     ve: ["Planeación", "Por estado", "Centro de Diseño", "Historial", "Tabla", "Redes Sociales", "Promocionales"],
@@ -80,7 +82,10 @@ for (const perfil of Object.keys(MATRIZ) as Perfil[]) {
     test(`"Eliminar permanentemente" lo tienen el Trafficker y Diseño (y el Ejecutivo, en lo suyo)`, async ({ page }) => {
       test.setTimeout(120_000);
       test.skip(!sesionDisponible(perfil), `Sin sesión de ${perfil}`);
-      test.skip(perfil === "comercial", "Comercial no tiene tablero de solicitudes");
+      // Comercial sí tiene tabla ("Mis solicitudes"), pero solo con lo suyo:
+      // si ese perfil aún no ha pedido nada, no hay fila que abrir. Su falta de
+      // botón de borrado la cubre el propio código (`puedeEliminar`).
+      test.skip(perfil === "comercial", "Comercial solo ve sus propias solicitudes");
       await abrirTablero(page);
       await page.getByText("Tabla", { exact: true }).first().click();
       const fila = page.getByText(/^GP\d{3,}/).first();
@@ -98,7 +103,6 @@ for (const perfil of Object.keys(MATRIZ) as Perfil[]) {
 
     test(`todos pueden crear una solicitud`, async ({ page }) => {
       test.skip(!sesionDisponible(perfil), `Sin sesión de ${perfil}`);
-      test.skip(perfil === "comercial", "Comercial no crea solicitudes de diseño");
       await abrirTablero(page);
       await page.getByRole("button", { name: /^Nueva$/i }).click();
       await expect(page.getByRole("heading", { name: /Nueva solicitud de diseño/i })).toBeVisible();
@@ -107,6 +111,41 @@ for (const perfil of Object.keys(MATRIZ) as Perfil[]) {
     });
   });
 }
+
+test.describe("Comercial: solicitudes propias, con el mismo formulario", () => {
+  test.use({ storageState: ficheroSesion("comercial") });
+
+  test("su tabla dice que solo están las suyas", async ({ page }) => {
+    test.skip(!sesionDisponible("comercial"), "Sin sesión de comercial");
+    await abrirTablero(page);
+    await page.getByText("Mis solicitudes", { exact: true }).click();
+    await expect(page.getByText(/las solicitudes que tú levantaste/i)).toBeVisible();
+  });
+
+  test("su solicitud nace marcada como CMR", async ({ page }) => {
+    test.skip(!sesionDisponible("comercial"), "Sin sesión de comercial");
+    await abrirTablero(page);
+    await page.getByRole("button", { name: /^Nueva$/i }).click();
+    await expect(page.getByRole("heading", { name: /Nueva solicitud de diseño/i })).toBeVisible();
+    // Es el formulario de siempre; lo único distinto es el área preseleccionada,
+    // que además sigue siendo editable.
+    const area = page
+      .locator(".form-group", { has: page.getByText("Área solicitante", { exact: true }) })
+      .locator("select");
+    await expect(area).toHaveValue("CMR");
+  });
+
+  test("su solicitud no trae ningún correo preseleccionado", async ({ page }) => {
+    test.skip(!sesionDisponible("comercial"), "Sin sesión de comercial");
+    await abrirTablero(page);
+    await page.getByRole("button", { name: /^Nueva$/i }).click();
+    await expect(page.getByRole("heading", { name: /Nueva solicitud de diseño/i })).toBeVisible();
+    // Ni el suyo ni el del puesto de CM: la lista nace vacía y lo dice.
+    await expect(page.getByText(/agrega a quien deba recibir la entrega/i)).toBeVisible();
+    await expect(page.getByText("comercial@ganaplay.com")).toHaveCount(0);
+    await expect(page.getByText("community.manager@ganaplay.com")).toHaveCount(0);
+  });
+});
 
 test.describe("El trabajo del Trafficker no se ve desde otros perfiles", () => {
   const ids = async (browser: Parameters<Parameters<typeof test>[1]>[0]["browser"], perfil: Perfil): Promise<string[]> => {
