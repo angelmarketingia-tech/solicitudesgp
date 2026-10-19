@@ -904,12 +904,15 @@ export default function GanaPlayMainApp() {
     const def = PROFILE_DEFAULTS[role];
     if (def?.area) { setArea(def.area); setAreaOtra(false); }
     setRequesterName(def?.requesterName || userName);
-    // Quien pide la pieza y el buzón del puesto de Community Manager, que
-    // coordina el contenido (ver destinatariosIniciales). Los demás se agregan
-    // a mano: los tres correos fijos de antes avisaban a quien no había pedido
-    // nada.
-    const own = emailForUser(userName) || (role === 'admin' ? DEFAULT_TRAFFICKER_EMAIL : '');
-    setRequesterEmails(destinatariosIniciales(own));
+    // Solo el correo de quien pide la pieza (ver destinatariosIniciales). Los
+    // demás se agregan a mano. Comercial ni siquiera eso: su buzón es
+    // compartido y arranca la lista vacía.
+    if (role === 'comercial') {
+      setRequesterEmails([]);
+    } else {
+      const own = emailForUser(userName) || (role === 'admin' ? DEFAULT_TRAFFICKER_EMAIL : '');
+      setRequesterEmails(destinatariosIniciales(own));
+    }
     // Community Manager: el formato de redes ya viene sugerido (menos clics).
     if (role === 'cm') setDimensions(prev => prev.length ? prev : [DEFAULT_SOCIAL_DIMENSION]);
   }, [role, userName]);

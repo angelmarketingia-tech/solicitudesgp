@@ -94,31 +94,23 @@ export function emailForUser(name: string): string {
 /**
  * Con quién se abre la lista de destinatarios al crear una solicitud.
  *
- * Quien la pide, y SIEMPRE el buzón del puesto de Community Manager.
+ * SOLO quien la pide. Cualquier otra persona se agrega a mano.
  *
- * POR QUÉ la CM va fija: el aviso de entrega se manda a los correos que lleva
- * la solicitud, y nada más. Al no estar ella, las entregas de lo que pedían
- * otros no le llegaban nunca, y es quien coordina el contenido: se enteraba de
- * que una pieza estaba lista por el chat, o no se enteraba.
+ * Hubo dos intentos antes de llegar aquí y los dos acabaron molestando. Primero
+ * tres correos fijos e invisibles, que avisaban a gente que no había pedido
+ * nada. Después el buzón del puesto de Community Manager preseleccionado en
+ * TODAS las solicitudes: visible y quitable, pero igual aparecía en las de todo
+ * el mundo y había que borrarlo una y otra vez. Quien crea la solicitud sabe a
+ * quién le toca enterarse; la lista nace con su correo y nada más.
  *
- * Va PRESELECCIONADA, no escondida: aparece como un chip más y quien crea la
- * solicitud puede quitarla si de verdad no le toca. Eso es lo que la distingue
- * de los tres correos fijos que hubo antes, que no se veían y acababan
- * avisando a gente que no había pedido nada.
+ * OJO con la consecuencia, que es real: el aviso de entrega se manda a los
+ * correos que lleva la solicitud y a nada más. Si la CM —o cualquier otro— debe
+ * enterarse de una entrega, hay que agregarlo AL CREARLA. Si no está, no le
+ * llega nada.
  */
 export function destinatariosIniciales(correoPropio: string): string[] {
   const propio = (correoPropio || "").trim();
-  const cm = DEFAULT_COMMUNITY_EMAIL.trim();
-  const lista = [propio, cm].filter(Boolean);
-  // Sin duplicados y sin distinguir mayúsculas: si la CM crea su propia
-  // solicitud, su correo no debe salir dos veces.
-  const vistos = new Set<string>();
-  return lista.filter(e => {
-    const clave = e.toLowerCase();
-    if (vistos.has(clave)) return false;
-    vistos.add(clave);
-    return true;
-  });
+  return propio ? [propio] : [];
 }
 
 /**

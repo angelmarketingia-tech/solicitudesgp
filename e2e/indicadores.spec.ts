@@ -154,16 +154,25 @@ test.describe("Formulario de solicitud", () => {
   });
 
   /**
-   * La Community Manager coordina el contenido, y el aviso de entrega solo va
-   * a los correos que lleva la solicitud. Sin ella en la lista, las entregas
-   * de lo que pedían otros no le llegaban nunca: se enteraba por el chat, o no
-   * se enteraba. Si esta prueba se pone roja, vuelve a quedarse fuera.
+   * La lista de destinatarios nace con UN solo correo: el de quien pide.
+   *
+   * Hubo dos intentos antes: tres correos fijos invisibles, y después el buzón
+   * del puesto de Community Manager preseleccionado en todas las solicitudes.
+   * Los dos acababan avisando a gente que no había pedido nada, y había que
+   * borrarlos a mano una y otra vez.
+   *
+   * La contrapartida es real y está asumida: el aviso de entrega va solo a los
+   * correos de la solicitud, así que a quien deba enterarse hay que agregarlo
+   * al crearla.
    */
-  test("el buzón de la Community Manager viene puesto como destinatario", async ({ page }) => {
+  test("solo viene el correo de quien pide la solicitud", async ({ page }) => {
     await page.goto("/");
     await page.getByRole("button", { name: /^Nueva$/i }).click();
     await expect(page.getByPlaceholder(/escribe un nombre o un correo/i)).toBeVisible({ timeout: 20_000 });
-    await expect(page.getByText("community.manager@ganaplay.com")).toBeVisible({ timeout: 10_000 });
+    // El Trafficker ve el suyo…
+    await expect(page.getByText("angel.vaca@ganaplay.com")).toBeVisible({ timeout: 10_000 });
+    // …y ninguno más puesto de oficio.
+    await expect(page.getByText("community.manager@ganaplay.com")).toHaveCount(0);
   });
 });
 
