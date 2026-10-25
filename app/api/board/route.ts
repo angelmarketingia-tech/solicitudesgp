@@ -46,8 +46,34 @@ function aligerar(id: string, data: Record<string, unknown>) {
   return { ...(sinBase64(data) as Record<string, unknown>), id };
 }
 
+/**
+ * Caché en memoria del proceso.
+ *
+ * POR QUÉ: este endpoint lee hasta 1000 documentos, y cada persona en modo
+ * respaldo lo pide una y otra vez. Sin caché, diez personas atascadas cuestan
+ * diez tableros enteros por vuelta; con él, cuestan uno. Y lo que factura
+ * Firestore es justo eso —los bytes que salen—, no el número de peticiones.
+ *
+ * LIMITACIÓN HONESTA: en serverless cada instancia tiene su propia memoria, así
+ * que esto no es un caché global y no garantiza UNA lectura por ventana. Pero
+ * las peticiones se reparten entre pocas instancias calientes, así que el
+ * ahorro real es grande y el coste de equivocarse es cero: lo peor que pasa es
+ * que se lea el tablero como se leía antes.
+ *
+ * El TTL (30 s) es menor que el intervalo del cliente (60 s): nadie ve datos
+ * más viejos de lo que ya toleraba el modo respaldo.
+ */
+const TTL_MS = 30_000;
+let cache: { requests: unknown[]; expira: number } | null = null;
+
 export async function GET() {
   try {
+    if (cache && cache.expira > Date.now()) {
+      return NextResponse.json(
+        { ok: true, requests: cache.requests },
+        { headers: { "Cache-Control": "no-store", "X-Board-Cache": "hit" } },
+      );
+    }
     const snap = await getDocs(
       query(collection(db, "requests"), orderBy("deliveryDate", "desc"), limit(1000))
     );
@@ -57,7 +83,11 @@ export async function GET() {
       .filter((d) => !d.data().board)
       .map((d) => aligerar(d.id, d.data()));
 
-    return NextResponse.json({ ok: true, requests }, { headers: { "Cache-Control": "no-store" } });
+    cache = { requests, expira: Date.now() + TTL_MS };
+    return NextResponse.json(
+      { ok: true, requests },
+      { headers: { "Cache-Control": "no-store", "X-Board-Cache": "miss" } },
+    );
   } catch (e) {
     console.error("[api/board] no se pudo leer el tablero:", e);
     return NextResponse.json({ ok: false, error: "No se pudo leer el tablero." }, { status: 503 });

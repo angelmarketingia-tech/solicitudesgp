@@ -89,6 +89,11 @@ const BUILTIN_DIRECTORY: DirectoryEntry[] = [
   { email: "juan.saavedra@ganaplay.com",    role: "ejecutivo",      name: "Juan Saavedra" },
   { email: "diego.barreto@ganaplay.com",    role: "ejecutivo",      name: "Diego Barreto" },
   { email: "juan.currea@ganaplay.com",      role: "ejecutivo",      name: "Juan Currea" },
+  // Taty entra con el MISMO alcance que Juan Saavedra (ejecutivo). Ojo: es el
+  // único acceso con correo personal en vez de corporativo; si más adelante le
+  // dan uno de @ganaplay.com, hay que cambiarlo aquí y en `users.ts`, porque
+  // ese correo es su identidad para la autoría de solicitudes.
+  { email: "taty.martinez1605@gmail.com",   role: "ejecutivo",      name: "Taty Martinez" },
   { email: "juan.gutierrez@ganaplay.com",   role: "operator",       name: "Juan" },
   // Dirección: ven todo el trabajo de la empresa, sin poder de borrado.
   { email: "sebastian.calderon@ganaplay.com", role: "administrative", name: "Sebastian" },

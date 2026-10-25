@@ -189,6 +189,19 @@ function guardarCopiaLocal(data: RequestType[]) {
   }
 }
 
+/**
+ * Cada cuánto pide el tablero al servidor cuando el tiempo real no responde.
+ *
+ * Eran 25 s, y ese número salía caro: cada vuelta lee hasta 1000 documentos, y
+ * lo que factura Firestore son los bytes que salen. Una sola persona atascada
+ * una jornada movía más datos que el equipo entero trabajando normal.
+ *
+ * Un minuto sigue siendo cómodo para trabajar —el modo respaldo es la
+ * excepción, no el día a día— y, junto al caché del endpoint, baja el gasto del
+ * peor caso a una fracción.
+ */
+const INTERVALO_RESPALDO_MS = 60_000;
+
 // Preselección por perfil: área y nombre del solicitante.
 const PROFILE_DEFAULTS: Record<string, { area: string; requesterName: string }> = {
   admin:          { area: "Pauta",          requesterName: "Trafficker" },
@@ -230,7 +243,7 @@ const CM_USER_LIST = ["Luisa", "Keyri"];
 // ─── Ejecutivos comerciales (Roberto) ───
 // Levantan y siguen sus solicitudes, y trabajan Promocionales y CMR. NO ven las
 // solicitudes que levanta el Trafficker ni el Centro de Diseño.
-const EJECUTIVO_USER_LIST = ["Roberto", "Juan Saavedra", "Diego Barreto", "Juan Currea"];
+const EJECUTIVO_USER_LIST = ["Roberto", "Juan Saavedra", "Diego Barreto", "Juan Currea", "Taty Martinez"];
 
 type RequestStatus = "Publicado" | "Denegado" | "Declinada" | "En Proceso" | "Planeando" | "Pendiente";
 type RequestPriority = "Bajo" | "Medio" | "Alto" | "Urgente";
@@ -658,7 +671,7 @@ export default function GanaPlayMainApp() {
     // redes cortan a medias: no falla, se cuelga. Cuando pasa, el tablero se
     // queda vacío y no se puede ni crear una solicitud. Si a los 8 segundos no
     // ha llegado nada, se pasa a pedirle los datos a nuestro servidor y se
-    // consulta cada 25 s. Si el tiempo real acaba respondiendo, se vuelve a él.
+    // consulta cada minuto. Si el tiempo real acaba respondiendo, se vuelve a él.
     let llegoAlgoEnVivo = false;
     let encuestando: ReturnType<typeof setInterval> | null = null;
 
@@ -678,7 +691,7 @@ export default function GanaPlayMainApp() {
       if (llegoAlgoEnVivo) return;
       console.warn('[tablero] sin respuesta en vivo; se pasa al respaldo por servidor.');
       void pedirAlServidor();
-      encuestando = setInterval(pedirAlServidor, 25_000);
+      encuestando = setInterval(pedirAlServidor, INTERVALO_RESPALDO_MS);
     }, 8_000);
 
     const qReq = query(collection(db, "requests"), orderBy("deliveryDate", "desc"), limit(1000));
@@ -706,7 +719,7 @@ export default function GanaPlayMainApp() {
       console.error("Firebase error:", err);
       // Un fallo del tiempo real tampoco deja el tablero muerto.
       void pedirAlServidor();
-      if (!encuestando) encuestando = setInterval(pedirAlServidor, 25_000);
+      if (!encuestando) encuestando = setInterval(pedirAlServidor, INTERVALO_RESPALDO_MS);
       setLoadingData(false);
     });
 
@@ -1663,18 +1676,46 @@ export default function GanaPlayMainApp() {
     }
   };
 
+  /**
+   * Deja lista una imagen de comentario: la comprime y la sube a Storage,
+   * devolviendo su URL.
+   *
+   * POR QUÉ A STORAGE Y NO DENTRO DEL DOCUMENTO: el tablero se carga ENTERO en
+   * cada sesión, así que una imagen guardada dentro de la solicitud se la baja
+   * todo el que abre la app, mire esa solicitud o no. Es el mismo agujero que
+   * ya se tapó con las referencias —y que se llevó por delante la factura de
+   * Firestore, que es casi toda transferencia de datos, no lecturas—. Aquí la
+   * imagen solo se baja cuando alguien abre ese comentario.
+   *
+   * Si Storage falla se cae a la data URL comprimida, como antes: un
+   * comentario sin su imagen sería peor que un documento algo más gordo.
+   */
+  const prepararImagenDeComentario = useCallback(async (
+    file: Blob & { type: string; size: number; name?: string },
+  ): Promise<string> => {
+    const dataUrl = await compressImageToDataUrl(file, { maxDimension: 1300, maxBytes: 420 * 1024 });
+    try {
+      const blob = await (await fetch(dataUrl)).blob();
+      const nombre = file.name || `comentario-${Date.now()}.jpg`;
+      const archivo = new File([blob], nombre, { type: blob.type || file.type || 'image/jpeg' });
+      return await uploadToStorage('creatives/_comentarios', archivo);
+    } catch (err) {
+      console.warn('[comentarios] Storage falló; la imagen queda en el documento:', err);
+      return dataUrl;
+    }
+  }, []);
+
   // Procesa una imagen (pegada o adjunta) para el comentario.
   const stageCommentImage = useCallback(async (file: Blob & { type: string; size: number; name?: string }) => {
     const err = validateImage(file);
     if (err) { addToast(err, 'error'); return; }
     try {
-      const dataUrl = await compressImageToDataUrl(file, { maxDimension: 1300, maxBytes: 420 * 1024 });
-      setReqMsgImage(dataUrl);
+      setReqMsgImage(await prepararImagenDeComentario(file));
       addToast("Imagen lista para enviar.", 'success');
     } catch {
       addToast("No se pudo procesar la imagen.", 'error');
     }
-  }, [addToast]);
+  }, [addToast, prepararImagenDeComentario]);
 
   // Pegar imagen con Ctrl+V / Cmd+V en el campo de comentario.
   const handleCommentPaste = (e: React.ClipboardEvent) => {
@@ -1698,13 +1739,13 @@ export default function GanaPlayMainApp() {
     const err = validateImage(file);
     if (err) { addToast(err, 'error'); return; }
     try {
-      const dataUrl = await compressImageToDataUrl(file, { maxDimension: 1300, maxBytes: 420 * 1024 });
-      setInitialCommentImgs(prev => [...prev, dataUrl]);
+      const url = await prepararImagenDeComentario(file);
+      setInitialCommentImgs(prev => [...prev, url]);
       addToast("Imagen añadida al comentario.", 'success');
     } catch {
       addToast("No se pudo procesar la imagen.", 'error');
     }
-  }, [addToast]);
+  }, [addToast, prepararImagenDeComentario]);
 
   const handleInitialCommentPaste = (e: React.ClipboardEvent) => {
     const items = Array.from(e.clipboardData.items).filter(i => i.type.startsWith("image/"));
@@ -3452,7 +3493,7 @@ export default function GanaPlayMainApp() {
             <AlertCircle size={16} color="var(--warning, #b54708)" style={{ flexShrink: 0 }} />
             <span style={{ fontSize: '12.5px', color: 'var(--text-secondary)', lineHeight: 1.5 }}>
               Tu red no permite la conexión en vivo con la base de datos, así que el tablero se está
-              cargando desde el servidor y se actualiza cada 25 segundos. Puedes trabajar con normalidad.
+              cargando desde el servidor y se actualiza cada minuto. Puedes trabajar con normalidad.
             </span>
           </div>
         )}

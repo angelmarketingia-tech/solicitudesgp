@@ -37,6 +37,7 @@ export const USER_DIRECTORY: Record<string, string> = {
   "Juan Saavedra": "Juan.Saavedra@ganaplay.com",
   "Diego Barreto": "diego.barreto@ganaplay.com",
   "Juan Currea": "juan.currea@ganaplay.com",
+  "Taty Martinez": "taty.martinez1605@gmail.com",
   "Sebastian": "sebastian.calderon@ganaplay.com",
   "Fernanda": "coordinador.marketing@ganaplay.com",
   "Andres": "andres.clavijo@ganaplay.com",
@@ -84,7 +85,7 @@ export const OPERATOR_USERS = ["Juan"] as const;
 export const ADMINISTRATIVE_USERS = ["Andres", "Sebastian", "Fernanda"] as const;
 
 /** Ejecutivos comerciales — espejo del backend. */
-export const EJECUTIVO_USERS = ["Roberto", "Juan Saavedra", "Diego Barreto", "Juan Currea"] as const;
+export const EJECUTIVO_USERS = ["Roberto", "Juan Saavedra", "Diego Barreto", "Juan Currea", "Taty Martinez"] as const;
 
 /** Correo asociado a un nombre de usuario (cadena vacía si no está registrado). */
 export function emailForUser(name: string): string {
