@@ -33,7 +33,8 @@ type DeliveryPayload = {
   type: "delivery";
   to: string | string[];   // uno o varios correos del/los solicitante(s)
   designer: string;
-  pieceType: string;
+  pieceType: string;       // compatibilidad: una pieza, o varias separadas por coma
+  pieces?: string[];       // la tanda completa, cuando son varias
   requesterName?: string;
   deliveryDate?: string;
   request: { id: string; title: string; status?: string };
@@ -107,7 +108,19 @@ export async function POST(req: Request) {
 
     // ── Entrega de pieza al solicitante ──
     if (payload.type === "delivery") {
-      const { to, request: r, designer, pieceType, requesterName, deliveryDate } = payload;
+      const { to, request: r, designer, pieceType, pieces, requesterName, deliveryDate } = payload;
+      // Una tanda puede traer varias piezas. Se listan en vez de amontonarlas
+      // en una línea: el diseñador sube seis archivos de una vez y el
+      // solicitante tiene que poder ver cuáles son de un vistazo.
+      const listaPiezas = (pieces || []).filter(Boolean);
+      const filaPiezas = listaPiezas.length > 1
+        ? `<p style="margin:0 0 8px;font-size:14px;color:#333333;">
+             <strong style="color:#6d6e71;">Piezas entregadas (${listaPiezas.length}):</strong>
+           </p>
+           <ul style="margin:0 0 10px;padding-left:20px;font-size:14px;color:#333333;">
+             ${listaPiezas.map(p => `<li style="margin-bottom:4px;">${p}</li>`).join("")}
+           </ul>`
+        : row("Pieza entregada", listaPiezas[0] || pieceType);
       // Acepta uno o varios correos; el correo de entrega llega a TODOS.
       const recipients = Array.from(new Set((Array.isArray(to) ? to : [to]).map(e => (e || "").trim()).filter(Boolean)));
       if (recipients.length === 0) {
@@ -126,7 +139,7 @@ export async function POST(req: Request) {
           row("Solicitante", requesterName || "—") +
           row("Solicitud", `${r.id} — ${r.title}`) +
           row("Estado", r.status || "Entregada") +
-          row("Pieza entregada", pieceType) +
+          filaPiezas +
           row("Diseñador", designer) +
           row("Fecha de entrega", deliveryDate || new Date().toISOString().split("T")[0]) +
           `<p style="margin:18px 0 4px;font-size:13px;color:#6d6e71;">

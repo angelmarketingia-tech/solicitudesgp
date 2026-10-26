@@ -1490,9 +1490,19 @@ export default function GanaPlayMainApp() {
       setSelectedReq({ ...selectedReq, ...local, history: newHistory });
       await createNotification('status_change', '🔄 Cambio de estado', `${selectedReq.id} "${selectedReq.title}" → ${newStatus} (por ${userName})`, 'admin', selectedReq.id);
 
-      // Cuando el diseñador marca la solicitud como Publicado (cierre final),
-      // el solicitante recibe email de confirmación. No bloquea el flujo.
-      if (newStatus === 'Publicado' && requesterEmailsOf(selectedReq).length > 0) {
+      // Aviso de cierre al solicitante, SOLO si no se le avisó ya.
+      //
+      // Antes salía siempre, con la misma plantilla y el mismo asunto que el
+      // correo de entrega: quien había recibido sus piezas hacía un rato
+      // recibía el mismo correo otra vez, y cada destinatario cuenta contra la
+      // cuota diaria. Si la solicitud tiene entregables, ya se avisó al
+      // subirlos y esto no aporta nada nuevo.
+      //
+      // Si NO tiene entregables —el trabajo se hizo por fuera del tablero y
+      // solo se marcó el cierre— este es el único aviso que recibiría, así que
+      // ahí sí sale. No bloquea el flujo.
+      const yaSeAvisoAlEntregar = (selectedReq.creatives || []).length > 0;
+      if (newStatus === 'Publicado' && !yaSeAvisoAlEntregar && requesterEmailsOf(selectedReq).length > 0) {
         sendEmailAlert({
           type: 'delivery',
           to: requesterEmailsOf(selectedReq),
@@ -1937,17 +1947,11 @@ export default function GanaPlayMainApp() {
 
       // Acciones secundarias NO bloqueantes:
       createNotification('creative_uploaded', '🎨 Entregable subido', `${reqSnapshot.id}: "${safeName}" por ${userName}`, 'admin', reqSnapshot.id);
-      if (requesterEmailsOf(reqSnapshot).length > 0) {
-        sendEmailAlert({
-          type: "delivery",
-          to: requesterEmailsOf(reqSnapshot),
-          request: { id: reqSnapshot.id, title: reqSnapshot.title, status: "En Proceso" },
-          designer: userName,
-          pieceType: type,
-          requesterName: reqSnapshot.requesterName || "",
-          deliveryDate: reqSnapshot.deliveryDate || "",
-        });
-      }
+      // OJO: el correo de entrega NO se manda aquí. Esta función corre una vez
+      // POR ARCHIVO, así que subir seis piezas disparaba seis correos casi
+      // idénticos — y Resend cuenta cada destinatario como un correo aparte.
+      // Lo manda `subirEntregables` una sola vez al terminar la tanda, con
+      // todas las piezas listadas.
       if (analizable) {
         void analyzeCreativeInBackground(reqSnapshot.id, newCreative.id!, type, file,
           { copy: reqSnapshot.copy, format: reqSnapshot.format, countries: reqSnapshot.countries });
@@ -1958,7 +1962,7 @@ export default function GanaPlayMainApp() {
       addToast(`Se subió "${safeName}" pero falló al actualizar la solicitud: ${msg}`, 'error');
       return null;
     }
-  }, [userName, addToast, createNotification, sendEmailAlert, analyzeCreativeInBackground]);
+  }, [userName, addToast, createNotification, analyzeCreativeInBackground]);
 
   // Subida de uno o varios entregables a la vez.
   // Garantías:
@@ -2000,14 +2004,16 @@ export default function GanaPlayMainApp() {
   /** Sube una tanda de entregables, vengan del selector o arrastrados. */
   const subirEntregables = async (files: File[]) => {
     if (files.length === 0 || !selectedReq) return;
+    const original: RequestType = selectedReq;
     let working: RequestType = selectedReq;
     let ok = 0;
     const failed: string[] = [];
+    const subidas: string[] = [];
     setLoading(true);
     try {
       for (const file of files) {
         const updated = await uploadDeliverableFile(file, working);
-        if (updated) { working = updated; ok++; }
+        if (updated) { working = updated; ok++; subidas.push(file.name); }
         else failed.push(file.name);
       }
       // Sincroniza la UI con el estado real acumulado (todas las piezas confirmadas).
@@ -2015,6 +2021,27 @@ export default function GanaPlayMainApp() {
 
       if (ok > 0) {
         addToast(`${ok} entregable${ok > 1 ? 's' : ''} subido${ok > 1 ? 's' : ''} correctamente.`, 'success');
+        // UN correo por tanda, con todas las piezas. Antes salía uno por
+        // archivo desde `uploadDeliverableFile`: seis piezas y dos
+        // destinatarios eran doce correos contra la cuota, y al solicitante le
+        // llegaban seis avisos casi iguales en un minuto.
+        //
+        // Se usan los destinatarios de `original` y no de `working`: subir no
+        // cambia los correos de la solicitud, y así el aviso sale aunque la
+        // última escritura haya devuelto algo incompleto.
+        const destinatarios = requesterEmailsOf(original);
+        if (destinatarios.length > 0) {
+          sendEmailAlert({
+            type: "delivery",
+            to: destinatarios,
+            request: { id: original.id, title: original.title, status: "En Proceso" },
+            designer: userName,
+            pieceType: subidas.join(", "),
+            pieces: subidas,
+            requesterName: original.requesterName || "",
+            deliveryDate: original.deliveryDate || "",
+          });
+        }
       }
       if (failed.length > 0) {
         // Mensaje único y claro: qué falló. (Cada fallo ya emitió su propio detalle.)

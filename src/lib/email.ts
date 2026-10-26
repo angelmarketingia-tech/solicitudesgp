@@ -50,6 +50,31 @@ export async function sendEmail({ to, subject, html }: SendArgs): Promise<EmailR
       body: JSON.stringify({ from, to: recipients, subject, html }),
     });
     const data = await res.json().catch(() => ({}));
+
+    // Cuota diaria del plan gratuito (100 correos/día, y OJO: cada
+    // destinatario cuenta como uno). Resend la devuelve como un 429 con
+    // `daily_quota_exceeded`, pero antes se mostraba el mensaje genérico
+    // "revisa la configuración de email": quien lo leía se iba a mirar
+    // variables de entorno que estaban perfectas. Se dice lo que pasa y
+    // cuándo se arregla solo.
+    const cuotaAgotada =
+      res.status === 429 &&
+      /daily_quota|quota/i.test(`${data?.name || ""} ${data?.message || ""}`);
+    if (cuotaAgotada) {
+      console.warn("[email] cuota diaria de Resend agotada:", data?.message || "");
+      return {
+        ok: false,
+        error:
+          "Se agotó la cuota diaria de correos. Se reinicia a medianoche UTC " +
+          "(19:00 en Colombia). La solicitud se guardó igual: solo no salió el aviso.",
+      };
+    }
+
+    // En el plan gratuito Resend informa cuánto queda en una cabecera. Queda
+    // en el registro del servidor para ver venir el tope antes de chocar.
+    const restante = res.headers.get("x-resend-daily-quota");
+    if (restante) console.log(`[email] cuota diaria restante: ${restante}`);
+
     if (!res.ok) {
       return { ok: false, error: data?.message || `Resend respondió ${res.status}.` };
     }
