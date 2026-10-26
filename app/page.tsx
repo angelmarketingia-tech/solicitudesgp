@@ -292,6 +292,19 @@ type ReferenceFile = {
 // Límites de las referencias de una solicitud.
 const REF_IMAGE_EXTS = ['jpg', 'jpeg', 'png', 'webp', 'gif'];
 const REF_DOC_EXTS = ['pdf', 'doc', 'docx'];
+/**
+ * Video como referencia. Va en `referenceFiles` y NO en `referenceImages`,
+ * porque esa lista se pinta con <img> y un video ahí sale como un roto.
+ */
+const REF_VIDEO_EXTS = ['mp4', 'mov', 'webm', 'm4v'];
+
+/** ¿Esta referencia adjunta es un video? Se mira el tipo y, si no, el nombre. */
+function esVideoRef(f: { type?: string; name?: string }): boolean {
+  const t = (f.type || '').toLowerCase();
+  if (REF_VIDEO_EXTS.includes(t) || t.startsWith('video/')) return true;
+  const ext = (f.name || '').split('.').pop()?.toLowerCase() || '';
+  return REF_VIDEO_EXTS.includes(ext);
+}
 const MAX_REF_DOC_BYTES = 50 * 1024 * 1024;   // 50 MB por archivo (van a Storage)
 const MAX_REF_INLINE_BYTES = 480 * 1024;      // respaldo dentro del doc de Firestore
 
@@ -1293,15 +1306,19 @@ export default function GanaPlayMainApp() {
       const problems: string[] = [];       // motivo real de cada archivo omitido
       for (const file of files) {
         const ext = (file.name.split('.').pop() || '').toLowerCase();
-        const isImg = file.type.startsWith('image/') || REF_IMAGE_EXTS.includes(ext);
+        const isVideo = file.type.startsWith('video/') || REF_VIDEO_EXTS.includes(ext);
+        const isImg = !isVideo && (file.type.startsWith('image/') || REF_IMAGE_EXTS.includes(ext));
         const isDoc = REF_DOC_EXTS.includes(ext);
 
-        if (!isImg && !isDoc) {
-          problems.push(`"${file.name}": formato no admitido (usa imágenes, PDF o Word).`);
+        if (!isImg && !isDoc && !isVideo) {
+          problems.push(`"${file.name}": formato no admitido (usa imágenes, video, PDF o Word).`);
           continue;
         }
-        if (file.size > MAX_REF_DOC_BYTES) {
-          problems.push(`"${file.name}" supera el límite de ${Math.round(MAX_REF_DOC_BYTES / 1024 / 1024)} MB.`);
+        // El video tiene su propio tope: 50 MB se queda corto para un
+        // storyboard o una referencia de animación de medio minuto.
+        const topeBytes = isVideo ? MAX_VIDEO_BYTES : MAX_REF_DOC_BYTES;
+        if (file.size > topeBytes) {
+          problems.push(`"${file.name}" supera el límite de ${Math.round(topeBytes / 1024 / 1024)} MB.`);
           continue;
         }
 
@@ -1338,13 +1355,24 @@ export default function GanaPlayMainApp() {
           // documento (el límite de un doc de Firestore es 1 MB). Se guarda la
           // versión ya comprimida, no el original: es lo que menos engorda la
           // solicitud, y esto es justo lo que encarecía la factura.
+          //
+          // EL VIDEO NO ENTRA AQUÍ NUNCA, pese a que un clip corto podría caber
+          // en los 480 KB. Meterlo en el documento es la vía exacta que costó
+          // la factura de septiembre: el tablero se carga entero, así que ese
+          // video se lo bajaría todo el equipo en cada sesión, lo abra o no.
+          // Antes que eso, se falla y se dice por qué.
           let fallback: string | null = null;
-          if (aSubir.size <= MAX_REF_INLINE_BYTES) {
+          if (!isVideo && aSubir.size <= MAX_REF_INLINE_BYTES) {
             try { fallback = await readFileAsDataUrl(aSubir); } catch { /* cae abajo */ }
           }
           if (fallback) {
             if (isImg) newImgs.push(fallback);
             else newFiles.push({ name: file.name, url: fallback, type: ext });
+          } else if (isVideo) {
+            problems.push(
+              `No se pudo subir el video "${file.name}". ${storageErrorMessage(upErr)} ` +
+              `Los videos solo pueden ir a Storage; vuelve a intentarlo.`
+            );
           } else {
             problems.push(`No se pudo adjuntar "${file.name}". ${storageErrorMessage(upErr)}`);
           }
@@ -4452,10 +4480,22 @@ export default function GanaPlayMainApp() {
                   </div>
                 )}
 
-                {/* Documentos de referencia (PDF/Word) */}
+                {/* Documentos y videos de referencia */}
                 {referenceFiles.length > 0 && (
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', marginBottom: '12px' }}>
-                    {referenceFiles.map((f, i) => (
+                    {referenceFiles.map((f, i) => esVideoRef(f) ? (
+                      // El video se ve aquí mismo: una referencia de animación
+                      // no se juzga por su nombre de archivo.
+                      <div key={i} style={{ position: 'relative', background: 'var(--surface-1)', border: '1px solid var(--border-color)', borderRadius: '10px', padding: '8px', overflow: 'hidden' }}>
+                        <video src={f.url} controls preload="metadata"
+                          style={{ width: '100%', maxHeight: '220px', borderRadius: '8px', display: 'block', background: '#000' }} />
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '6px' }}>
+                          <Play size={14} color="var(--accent-color)" />
+                          <span style={{ flex: 1, fontSize: '12px', color: 'var(--text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{f.name}</span>
+                          <X size={15} style={{ cursor: 'pointer', color: 'var(--danger)' }} onClick={() => setReferenceFiles(prev => prev.filter((_, idx) => idx !== i))} />
+                        </div>
+                      </div>
+                    ) : (
                       <div key={i} style={{ display: 'flex', alignItems: 'center', gap: '8px', background: 'var(--surface-1)', border: '1px solid var(--border-color)', borderRadius: '10px', padding: '8px 12px' }}>
                         <FileText size={16} color={f.type === 'pdf' ? 'var(--danger)' : 'var(--info)'} />
                         <span style={{ flex: 1, fontSize: '13px', color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{f.name}</span>
@@ -4480,10 +4520,11 @@ export default function GanaPlayMainApp() {
                         : 'Arrastra las referencias aquí o haz clic')}
                     </div>
                     <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
-                      Imágenes (JPG, PNG, GIF) · o documentos <strong>PDF</strong> y <strong>Word</strong> · hasta {Math.round(MAX_REF_DOC_BYTES / 1024 / 1024)} MB
+                      Imágenes (JPG, PNG, GIF) · <strong>video</strong> (MP4, MOV, WEBM) · documentos <strong>PDF</strong> y <strong>Word</strong>
+                      <br />Hasta {Math.round(MAX_REF_DOC_BYTES / 1024 / 1024)} MB, o {Math.round(MAX_VIDEO_BYTES / 1024 / 1024)} MB si es video
                     </div>
                   </div>
-                  <input type="file" accept="image/*,.pdf,.doc,.docx,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document" multiple style={{ display: 'none' }} onChange={handleRefUpload} />
+                  <input type="file" accept="image/*,video/*,.mp4,.mov,.webm,.m4v,.pdf,.doc,.docx,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document" multiple style={{ display: 'none' }} onChange={handleRefUpload} />
                 </label>
               </div>
 
@@ -4831,14 +4872,32 @@ export default function GanaPlayMainApp() {
                       );
                     })()}
 
-                    {/* Documentos de referencia (PDF/Word) */}
+                    {/* Documentos y videos de referencia */}
                     {selectedReq.referenceFiles && selectedReq.referenceFiles.length > 0 && (
                       <div style={{ marginTop: '14px' }}>
                         <div style={{ fontSize: '10px', fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.8px', marginBottom: '8px' }}>
-                          Documentos de referencia ({selectedReq.referenceFiles.length})
+                          Documentos y videos de referencia ({selectedReq.referenceFiles.length})
                         </div>
                         <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                          {selectedReq.referenceFiles.map((f, i) => (
+                          {selectedReq.referenceFiles.map((f, i) => esVideoRef(f) ? (
+                            // El video se reproduce en la ficha. `preload="metadata"`
+                            // baja solo la cabecera: abrir una solicitud no se trae
+                            // el archivo entero de Storage si nadie le da al play.
+                            <div key={i} style={{ background: 'var(--surface-1)', border: '1px solid var(--border-color)', borderRadius: '10px', padding: '8px' }}>
+                              <video src={f.url} controls preload="metadata"
+                                style={{ width: '100%', maxHeight: '300px', borderRadius: '8px', display: 'block', background: '#000' }} />
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '6px' }}>
+                                <Play size={14} color="var(--accent-color)" />
+                                <span style={{ flex: 1, fontSize: '12px', color: 'var(--text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{f.name}</span>
+                                <a href={f.url.startsWith('data:') ? f.url : `/api/download?url=${encodeURIComponent(f.url)}&name=${encodeURIComponent(f.name)}`}
+                                  target="_blank" rel="noreferrer" download={f.name}
+                                  title="Descargar el video"
+                                  style={{ display: 'flex', alignItems: 'center', color: 'var(--accent-color)' }}>
+                                  <Download size={14} />
+                                </a>
+                              </div>
+                            </div>
+                          ) : (
                             // Los documentos en Storage se piden por el proxy: fuerza la
                             // descarga con su nombre original (el de Storage va saneado)
                             // y evita el CORS del bucket.
