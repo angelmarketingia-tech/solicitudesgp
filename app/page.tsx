@@ -226,7 +226,7 @@ const DESIGNER_USERS = ["Juan David", "Eliana", "Verónica", "Caleb"];
 
 // ─── Operadores (Juan). "Quota" pasó a ser el perfil Comercial ───
 // Perfiles con mismos permisos que CM pero cada uno con su nombre propio.
-// NO acceden al panel interno de diseñadores ni a la IA Andromeda.
+// NO acceden al panel interno de diseñadores.
 const OPERATOR_USER_LIST = ["Juan"];
 
 // ─── DIRECTIVOS (Andres, Sebastian) ───
@@ -248,18 +248,10 @@ const EJECUTIVO_USER_LIST = ["Roberto", "Juan Saavedra", "Diego Barreto", "Juan 
 type RequestStatus = "Publicado" | "Denegado" | "Declinada" | "En Proceso" | "Planeando" | "Pendiente";
 type RequestPriority = "Bajo" | "Medio" | "Alto" | "Urgente";
 
-type AIEvaluation = {
-  rating: number;
-  color: "red" | "yellow" | "green";
-  explanation: string;
-  validation: string;
-};
-
 type Creative = {
   id?: string;        // identidad única de la pieza (las piezas antiguas no la tienen)
   url: string;
   type: string;       // nombre de archivo (solo para mostrar/descargar; NO es la identidad)
-  aiEvaluation?: AIEvaluation;
 };
 
 // Identidad estable de una pieza. Usa `id` si existe; para piezas antiguas
@@ -281,16 +273,6 @@ const requesterEmailsOf = (r: { requesterEmails?: string[]; requesterEmail?: str
   const many = (r.requesterEmails || []).map(e => (e || '').trim()).filter(Boolean);
   if (many.length) return Array.from(new Set(many));
   return r.requesterEmail && r.requesterEmail.trim() ? [r.requesterEmail.trim()] : [];
-};
-
-type AIFeedback = {
-  resumen: string;
-  faltantes: string[];
-  preguntas_sugeridas: string[];
-  checklist: string[];
-  riesgos: string[];
-  recomendaciones: string[];
-  generatedAt?: string;
 };
 
 type HistoryEntry = {
@@ -361,7 +343,6 @@ type RequestType = {
   requesterEmails?: string[];     // varios correos: la entrega les llega a todos
   objective?: string;
   channels?: string[];
-  aiFeedback?: AIFeedback;
   history?: HistoryEntry[];
   updatedAt?: unknown;
   // ── Declinación (no destructiva) ──
@@ -375,11 +356,6 @@ type DesignerChatMsg = {
   sender: string;
   text: string;
   time: string;
-};
-
-type ChatMessage = {
-  role: "user" | "assistant";
-  content: string | { type: string; text?: string; image_url?: { url: string } }[];
 };
 
 // Mensaje del chat propio de cada solicitud
@@ -584,7 +560,6 @@ export default function GanaPlayMainApp() {
 
   // ── Archivos / chat ──
   const [loading, setLoading] = useState(false);
-  const [aiBriefLoading, setAiBriefLoading] = useState(false);
   const [contextMenu, setContextMenu] = useState<{ reqId: string; x: number; y: number } | null>(null);
 
   // ── Chat por solicitud ──
@@ -613,25 +588,11 @@ export default function GanaPlayMainApp() {
   // Redes Sociales de la Community Manager: calendario o sus entregas.
   const [redesVista, setRedesVista] = useState<'Calendario' | 'Entregas'>('Calendario');
 
-  const [chatOpen, setChatOpen] = useState(false);
-  const [chatMessages, setChatMessages] = useState<ChatMessage[]>(() => {
-    try {
-      const saved = localStorage.getItem('andromeda_chat');
-      if (saved) return JSON.parse(saved).slice(-20);
-    } catch {}
-    return [{ role: 'assistant' as const, content: 'Hola. Soy IA Andromeda, especialista en Meta Ads y diseño creativo de GanaPlay. Sube una pieza y te doy feedback con scoring por marca, legibilidad, jerarquía visual y formato.' }];
-  });
-  const [chatInput, setChatInput] = useState("");
-  const [chatLoading, setChatLoading] = useState(false);
-  const [chatImage, setChatImage] = useState<string | null>(null);
-  const [chatLastSentImage, setChatLastSentImage] = useState(false);
-  const [aiCaps, setAiCaps] = useState<{ aiConfigured: boolean; visionAvailable: boolean; textProvider?: { name: string; model: string } | null; visionProvider?: { name: string; model: string } | null } | null>(null);
 
   // ── Chat de equipo ──
   const [teamChatContent, setTeamChatContent] = useState<DesignerChatMsg[]>([]);
   const [teamInput, setTeamInput] = useState("");
 
-  const scrollRef = useRef<HTMLDivElement>(null);
   const teamChatRef = useRef<HTMLDivElement>(null);
 
   // ── Filtros ──
@@ -768,30 +729,8 @@ export default function GanaPlayMainApp() {
   }, []);
 
   useEffect(() => {
-    if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
-  }, [chatMessages]);
-
-  useEffect(() => {
     if (teamChatRef.current) teamChatRef.current.scrollTop = teamChatRef.current.scrollHeight;
   }, [teamChatContent]);
-
-  useEffect(() => {
-    try { localStorage.setItem('andromeda_chat', JSON.stringify(chatMessages.slice(-20))); } catch {}
-  }, [chatMessages]);
-
-  // Capacidades del backend (visión / proveedor) — una sola llamada al abrir la app.
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const res = await fetch('/api/chat', { method: 'GET' });
-        if (!res.ok) return;
-        const data = await res.json();
-        if (!cancelled) setAiCaps(data);
-      } catch { /* silencioso: la UI seguirá funcionando */ }
-    })();
-    return () => { cancelled = true; };
-  }, []);
 
   useEffect(() => {
     const handler = () => setContextMenu(null);
@@ -1426,24 +1365,6 @@ export default function GanaPlayMainApp() {
     }
   };
 
-  // Imagen del chat IA: se comprime a data URL (no usa Storage).
-  const handleChatImageUpload = async (e: ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    e.target.value = "";
-    if (!file) return;
-    const err = validateImage(file);
-    if (err) { addToast(err, 'error'); return; }
-    setLoading(true);
-    try {
-      const dataUrl = await compressImageToDataUrl(file, { maxDimension: 1100, maxBytes: 380 * 1024 });
-      setChatImage(dataUrl);
-    } catch (e2: unknown) {
-      addToast("Error procesando la imagen: " + (e2 instanceof Error ? e2.message : ""), 'error');
-    } finally {
-      setLoading(false);
-    }
-  };
-
   /**
    * Cambio de estado del diseñador.
    *
@@ -1771,58 +1692,6 @@ export default function GanaPlayMainApp() {
     files.forEach(f => void stageInitialCommentImage(f));
   };
 
-  // Evaluación IA de una pieza, en segundo plano: NO bloquea la subida.
-  const analyzeCreativeInBackground = useCallback(async (
-    reqId: string,
-    creativeId: string,
-    type: string,
-    file: File,
-    ctx: { copy: string; format: string; countries: string[] },
-  ) => {
-    try {
-      const reader = new FileReader();
-      const base64data = await new Promise<string>((resolve, reject) => {
-        reader.onloadend = () => resolve(reader.result as string);
-        reader.onerror = reject;
-        reader.readAsDataURL(file);
-      });
-      const ctrl = new AbortController();
-      const timer = setTimeout(() => ctrl.abort(), 30000);
-      const res = await fetch("/api/analyze", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          imageBase64: base64data,
-          copy: ctx.copy,
-          format: ctx.format,
-          country: ctx.countries.join(", "),
-          dimensions: type,
-        }),
-        signal: ctrl.signal,
-      });
-      clearTimeout(timer);
-      const resData = await res.json();
-      if (!res.ok || !resData.rating) return;
-
-      // CLAVE anti-"desaparece": NO escribimos `creativesAfterUpload` (lista
-      // capturada cuando este archivo se subió; puede ser vieja si después se
-      // subieron más). Leemos el doc ACTUAL y solo añadimos la evaluación a la
-      // pieza que corresponde, preservando todo lo demás. Si la pieza ya no
-      // existe (fue reemplazada/borrada), no hacemos nada.
-      const freshSnap = await getDoc(doc(db, "requests", reqId));
-      if (!freshSnap.exists()) return;
-      const currentCreatives: Creative[] = (freshSnap.data().creatives as Creative[]) || [];
-      // Apunta a la pieza EXACTA por id (dos piezas pueden tener el mismo nombre).
-      if (!currentCreatives.some(c => c.id === creativeId)) return;
-      const merged = currentCreatives.map(c =>
-        c.id === creativeId ? { ...c, aiEvaluation: resData as AIEvaluation } : c);
-      await updateDoc(doc(db, "requests", reqId), { creatives: merged });
-      setSelectedReq(prev => (prev && prev.id === reqId) ? { ...prev, creatives: merged } : prev);
-    } catch {
-      /* La evaluación IA es opcional: si falla, la pieza ya quedó guardada. */
-    }
-  }, []);
-
   // Sube un archivo entregable. Devuelve la solicitud actualizada (o null si falla).
   // Estrategia anti-cuelgue:
   //   1. Timeout duro de 25 s (no 90).
@@ -1848,8 +1717,6 @@ export default function GanaPlayMainApp() {
     // Solo las imágenes ESTÁTICAS se pueden comprimir a data URL: pasar un GIF
     // animado por canvas lo dejaría en un solo fotograma.
     const isImage = kind === 'image';
-    // El GIF sí se puede evaluar con la IA (analiza el primer fotograma).
-    const analizable = kind === 'image' || kind === 'animated';
     const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_');
     const type = file.name;
 
@@ -1952,17 +1819,13 @@ export default function GanaPlayMainApp() {
       // idénticos — y Resend cuenta cada destinatario como un correo aparte.
       // Lo manda `subirEntregables` una sola vez al terminar la tanda, con
       // todas las piezas listadas.
-      if (analizable) {
-        void analyzeCreativeInBackground(reqSnapshot.id, newCreative.id!, type, file,
-          { copy: reqSnapshot.copy, format: reqSnapshot.format, countries: reqSnapshot.countries });
-      }
       return updatedReq;
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'error guardando en Firestore';
       addToast(`Se subió "${safeName}" pero falló al actualizar la solicitud: ${msg}`, 'error');
       return null;
     }
-  }, [userName, addToast, createNotification, analyzeCreativeInBackground]);
+  }, [userName, addToast, createNotification]);
 
   // Subida de uno o varios entregables a la vez.
   // Garantías:
@@ -2052,51 +1915,6 @@ export default function GanaPlayMainApp() {
       }
     } finally {
       setLoading(false);
-    }
-  };
-
-  const sendChatMessage = async () => {
-    if (chatLoading) return; // previene doble envío
-    if (!chatInput.trim() && !chatImage) return;
-    const hadImage = Boolean(chatImage);
-    let userContent: ChatMessage['content'] = chatInput;
-    if (chatImage) {
-      userContent = [
-        { type: "text", text: chatInput || "Analiza esta pieza para Meta Ads de GanaPlay y dame scoring + recomendaciones." },
-        { type: "image_url", image_url: { url: chatImage } },
-      ];
-    }
-    const userMsg: ChatMessage = { role: "user", content: userContent };
-    const newMessages = [...chatMessages, userMsg];
-    setChatMessages(newMessages);
-    setChatInput("");
-    setChatImage(null);
-    setChatLastSentImage(hadImage);
-    setChatLoading(true);
-
-    // Timeout cliente: 60 s. Evita loaders eternos si la red se traba.
-    const ctrl = new AbortController();
-    const timeoutId = setTimeout(() => ctrl.abort(), 60000);
-    try {
-      const res = await fetch("/api/chat", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ messages: newMessages }),
-        signal: ctrl.signal,
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data?.error || `HTTP ${res.status}`);
-      setChatMessages([...newMessages, { role: "assistant", content: data.content }]);
-      if (data.meta) setAiCaps(prev => prev ? { ...prev, visionAvailable: Boolean(data.meta.visionAvailable) } : prev);
-    } catch (err: unknown) {
-      const isAbort = err instanceof Error && err.name === 'AbortError';
-      const text = isAbort
-        ? "⏱️ La IA tardó demasiado. Reintenta o reduce el tamaño de la imagen."
-        : `❌ ${err instanceof Error ? err.message : "Error desconocido"}`;
-      setChatMessages([...newMessages, { role: "assistant", content: text }]);
-    } finally {
-      clearTimeout(timeoutId);
-      setChatLoading(false);
     }
   };
 
@@ -2512,47 +2330,6 @@ export default function GanaPlayMainApp() {
     setDraggedReqId(null);
   };
 
-  // ─── Análisis de brief con IA (feedback estructurado) ───
-  const runBriefAnalysis = useCallback(async () => {
-    if (!selectedReq) return;
-    setAiBriefLoading(true);
-    try {
-      const res = await fetch("/api/brief-feedback", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          title: selectedReq.title,
-          copy: selectedReq.copy,
-          objective: selectedReq.objective,
-          area: selectedReq.area,
-          channels: selectedReq.channels,
-          countries: selectedReq.countries,
-          dimensions: selectedReq.dimensions,
-          format: selectedReq.format,
-          deliveryDate: selectedReq.deliveryDate,
-          priority: selectedReq.priority,
-        }),
-      });
-      const data = await res.json();
-      if (!res.ok || data.error) throw new Error(data.error || "Error de IA");
-      const feedback: AIFeedback = {
-        resumen: data.resumen || "",
-        faltantes: data.faltantes || [],
-        preguntas_sugeridas: data.preguntas_sugeridas || [],
-        checklist: data.checklist || [],
-        riesgos: data.riesgos || [],
-        recomendaciones: data.recomendaciones || [],
-        generatedAt: new Date().toISOString(),
-      };
-      await updateDoc(doc(db, "requests", selectedReq.id), { aiFeedback: feedback, updatedAt: serverTimestamp() });
-      setSelectedReq({ ...selectedReq, aiFeedback: feedback });
-      addToast("Análisis de brief generado por la IA.", 'success');
-    } catch (err: unknown) {
-      addToast("La IA no pudo analizar el brief: " + (err instanceof Error ? err.message : ""), 'error');
-    } finally {
-      setAiBriefLoading(false);
-    }
-  }, [selectedReq, addToast]);
 
   // Nombre de la persona que está entrando, según el rol elegido.
   const nombreElegido = useMemo(() => {
@@ -2703,10 +2480,9 @@ export default function GanaPlayMainApp() {
     if (perfilOpen) { setPerfilOpen(false); return true; }
     if (createModalOpen) { setCreateModalOpen(false); setEditingReqId(null); return true; }
     if (modalOpen) { setModalOpen(false); return true; }
-    if (chatOpen) { setChatOpen(false); return true; }
     if (notifPanelOpen) { setNotifPanelOpen(false); return true; }
     return false;
-  }, [lightboxImage, deleteModalOpen, declineModalOpen, perfilOpen, createModalOpen, modalOpen, chatOpen, notifPanelOpen]);
+  }, [lightboxImage, deleteModalOpen, declineModalOpen, perfilOpen, createModalOpen, modalOpen, notifPanelOpen]);
 
   // ── Escape cierra lo que esté abierto ──
   useEffect(() => {
@@ -2725,7 +2501,7 @@ export default function GanaPlayMainApp() {
   // Con cada ventana que se abre se apila una entrada de historial; al
   // retroceder, se consume esa entrada y solo se cierra la ventana.
   const hayAlgoAbierto = Boolean(
-    lightboxImage || deleteModalOpen || declineModalOpen || perfilOpen || createModalOpen || modalOpen || chatOpen
+    lightboxImage || deleteModalOpen || declineModalOpen || perfilOpen || createModalOpen || modalOpen
   );
   const capasApiladas = useRef(0);
 
@@ -4134,9 +3910,6 @@ export default function GanaPlayMainApp() {
                                 );
                               })()}
                               <span style={{ fontSize: '11px', color: 'var(--text-secondary)', fontWeight: 600 }}>{creative.type}</span>
-                              {creative.aiEvaluation && (
-                                <span className={`badge badge-${creative.aiEvaluation.color}`} style={{ fontSize: '10px' }}>{creative.aiEvaluation.rating}/10</span>
-                              )}
                               {gestionaSolicitudes && (
                                 <button className="btn-secondary" style={{ padding: '5px 10px', fontSize: '11px', width: '100%', borderRadius: '8px', cursor: 'pointer' }}
                                   onClick={() => handleDownload(creative, req.id, creative.type)}>
@@ -4358,81 +4131,6 @@ export default function GanaPlayMainApp() {
           <PromoModule role={role} userName={userName} addToast={addToast} />
         )}
       </div>
-
-      {/* ─── CHAT IA ANDROMEDA (DISEÑADOR) ─── */}
-      {role === 'designer' && (
-        <div style={{ position: 'fixed', bottom: '24px', right: '24px', zIndex: 90 }}>
-          {!chatOpen ? (
-            <button aria-label="Abrir chat IA Andromeda" onClick={() => setChatOpen(true)} className="btn"
-              style={{ borderRadius: '50%', width: '58px', height: '58px', padding: 0, boxShadow: 'var(--shadow-lg)' }}>
-              <Bot size={28} />
-            </button>
-          ) : (
-            <div className="card" style={{ width: '380px', height: '560px', display: 'flex', flexDirection: 'column', overflow: 'hidden', boxShadow: 'var(--shadow-lg)' }}>
-              <div style={{ padding: '14px', borderBottom: '1px solid var(--border-color)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'var(--accent-soft)' }}>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: 'var(--accent-dark)' }}>
-                    <Bot size={22} /> <strong>IA Andromeda</strong>
-                    {aiCaps && (
-                      <span title={aiCaps.visionAvailable ? `Visión: ${aiCaps.visionProvider?.model}` : 'Sin visión configurada'}
-                            style={{ fontSize: '10px', fontWeight: 700, padding: '2px 6px', borderRadius: '999px',
-                                     background: aiCaps.visionAvailable ? 'var(--success, #00783e)' : 'var(--warning, #b54708)',
-                                     color: '#fff' }}>
-                        {aiCaps.visionAvailable ? '👁 visión activa' : '⚠ sin visión'}
-                      </span>
-                    )}
-                  </div>
-                  <div style={{ fontSize: '10.5px', color: 'var(--text-muted)' }}>
-                    {aiCaps?.textProvider ? `${aiCaps.textProvider.name} · ${aiCaps.textProvider.model}` : 'Marca GanaPlay + Meta Ads'}
-                  </div>
-                </div>
-                <button aria-label="Cerrar chat" onClick={() => setChatOpen(false)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-secondary)', display: 'flex', padding: 0, width: 'auto' }}><X size={20} /></button>
-              </div>
-              <div ref={scrollRef} style={{ flexGrow: 1, padding: '14px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '10px' }}>
-                {chatMessages.map((msg, i) => (
-                  <div key={i} style={{ alignSelf: msg.role === 'user' ? 'flex-end' : 'flex-start', maxWidth: '88%', padding: '10px 14px', borderRadius: '14px', fontSize: '13px', lineHeight: 1.55, background: msg.role === 'user' ? 'var(--accent-soft)' : 'var(--surface-1)', border: '1px solid var(--border-color)', color: 'var(--text-primary)', whiteSpace: 'pre-wrap' }}>
-                    {Array.isArray(msg.content) ? (
-                      <div>
-                        {msg.content.map((c, idx) => c.type === 'text'
-                          ? <p key={idx} style={{ margin: 0 }}>{c.text}</p>
-                          : <img key={idx} src={c.image_url?.url} alt="Imagen adjunta" style={{ width: '100%', borderRadius: '8px', marginTop: '8px' }} />)}
-                      </div>
-                    ) : msg.content}
-                  </div>
-                ))}
-                {chatLoading && (
-                  <div style={{ alignSelf: 'flex-start', fontSize: '12px', color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                    <span style={{ display: 'inline-block', width: '8px', height: '8px', borderRadius: '50%', background: 'var(--accent-color)', animation: 'pulse 1s infinite' }} />
-                    {chatLastSentImage ? 'Analizando imagen…' : 'Andromeda está escribiendo…'}
-                  </div>
-                )}
-              </div>
-              {chatImage && (
-                <div style={{ padding: '8px 12px', background: 'var(--accent-soft)', borderTop: '1px solid var(--border-color)' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                    <img src={chatImage} alt="Vista previa" style={{ height: '36px', borderRadius: '4px' }} />
-                    <span style={{ fontSize: '12px', color: 'var(--text-secondary)', flex: 1 }}>Imagen lista para analizar</span>
-                    <X size={16} onClick={() => setChatImage(null)} aria-label="Quitar imagen" style={{ cursor: 'pointer', color: 'var(--danger)' }} />
-                  </div>
-                  {aiCaps && !aiCaps.visionAvailable && (
-                    <p style={{ fontSize: '10px', color: 'var(--warning)', margin: '6px 0 0', lineHeight: 1.4 }}>
-                      ⚠️ El proveedor de IA actual no soporta visión. Configura <code>OPENAI_API_KEY</code> o <code>VISION_API_KEY</code> para análisis visual real. Mientras tanto, describe la pieza en tu mensaje.
-                    </p>
-                  )}
-                </div>
-              )}
-              <div style={{ padding: '12px', borderTop: '1px solid var(--border-color)', display: 'flex', gap: '8px', alignItems: 'center' }}>
-                <label aria-label="Adjuntar imagen" style={{ cursor: 'pointer', color: 'var(--accent-color)', width: 'auto', display: 'flex' }}>
-                  <ImageIcon size={22} /><input type="file" accept="image/*" style={{ display: 'none' }} onChange={handleChatImageUpload} />
-                </label>
-                <input type="text" value={chatInput} onChange={(e) => setChatInput(e.target.value)}
-                  onKeyDown={(e) => e.key === 'Enter' && sendChatMessage()} placeholder="Pregunta o sube un diseño..." style={{ flexGrow: 1, fontSize: '13px' }} />
-                <button aria-label="Enviar mensaje al chat" onClick={sendChatMessage} className="btn" style={{ padding: '10px' }} disabled={chatLoading}><Send size={18} /></button>
-              </div>
-            </div>
-          )}
-        </div>
-      )}
 
       {/* ─── PANEL DE NOTIFICACIONES ─── */}
       {notifPanelOpen && (
@@ -5159,53 +4857,6 @@ export default function GanaPlayMainApp() {
                     )}
                   </div>
 
-                  {/* Panel feedback IA */}
-                  <div className="card" style={{ padding: '18px' }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px', gap: '8px', flexWrap: 'wrap' }}>
-                      <h3 style={{ margin: 0, fontSize: '15px', display: 'flex', alignItems: 'center', gap: '8px', color: 'var(--text-primary)' }}>
-                        <Sparkles size={16} color="var(--accent-color)" /> Feedback IA del brief
-                      </h3>
-                      <button className="btn-secondary" disabled={aiBriefLoading} onClick={runBriefAnalysis}
-                        style={{ padding: '7px 12px', fontSize: '12px', borderRadius: '9px', cursor: aiBriefLoading ? 'not-allowed' : 'pointer' }}>
-                        {aiBriefLoading ? 'Analizando…' : (selectedReq.aiFeedback ? 'Volver a analizar' : 'Analizar con IA')}
-                      </button>
-                    </div>
-                    {selectedReq.aiFeedback ? (
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-                        <div>
-                          <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--accent-dark)', marginBottom: '4px' }}>Resumen</div>
-                          <p style={{ margin: 0, fontSize: '13px', lineHeight: 1.55, color: 'var(--text-primary)' }}>{selectedReq.aiFeedback.resumen || 'Sin resumen.'}</p>
-                        </div>
-                        {([
-                          { key: 'faltantes', label: 'Información faltante', color: 'var(--danger)' },
-                          { key: 'preguntas_sugeridas', label: 'Preguntas al solicitante', color: 'var(--info)' },
-                          { key: 'checklist', label: 'Checklist de producción', color: 'var(--accent-color)' },
-                          { key: 'riesgos', label: 'Riesgos de plazo', color: 'var(--warning)' },
-                          { key: 'recomendaciones', label: 'Recomendaciones', color: 'var(--accent-dark)' },
-                        ] as const).map(section => {
-                          const items = selectedReq.aiFeedback?.[section.key] || [];
-                          if (items.length === 0) return null;
-                          return (
-                            <div key={section.key}>
-                              <div style={{ fontSize: '11px', fontWeight: 700, color: section.color, marginBottom: '4px' }}>{section.label}</div>
-                              <ul style={{ margin: 0, paddingLeft: '18px', display: 'flex', flexDirection: 'column', gap: '3px' }}>
-                                {items.map((it, i) => <li key={i} style={{ fontSize: '12.5px', lineHeight: 1.5, color: 'var(--text-secondary)' }}>{it}</li>)}
-                              </ul>
-                            </div>
-                          );
-                        })}
-                        {selectedReq.aiFeedback.generatedAt && (
-                          <div style={{ fontSize: '10px', color: 'var(--text-muted)' }}>Generado: {new Date(selectedReq.aiFeedback.generatedAt).toLocaleString('es-ES')}</div>
-                        )}
-                      </div>
-                    ) : (
-                      <div style={{ textAlign: 'center', padding: '20px', color: 'var(--text-muted)', fontSize: '13px' }}>
-                        <Sparkles size={28} style={{ opacity: 0.35, marginBottom: '8px' }} />
-                        <p style={{ margin: 0 }}>Aún sin análisis. La IA resume el brief, detecta faltantes y genera un checklist de producción.</p>
-                      </div>
-                    )}
-                  </div>
-
                   {/* Historial de cambios */}
                   {selectedReq.history && selectedReq.history.length > 0 && (
                     <div className="card" style={{ padding: '18px' }}>
@@ -5441,12 +5092,6 @@ export default function GanaPlayMainApp() {
                             )}
                             <div style={{ flex: 1, minWidth: 0 }}>
                               <div style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text-primary)', wordBreak: 'break-word' }}>{creative.type}</div>
-                              {creative.aiEvaluation && (
-                                <span className={`badge badge-${creative.aiEvaluation.color}`} style={{ fontSize: '10px', marginTop: '4px' }}>IA: {creative.aiEvaluation.rating}/10</span>
-                              )}
-                              {creative.aiEvaluation?.explanation && (
-                                <p style={{ fontSize: '11px', color: 'var(--text-secondary)', margin: '6px 0 0', lineHeight: 1.5 }}>{creative.aiEvaluation.explanation}</p>
-                              )}
                             </div>
                           </div>
                           <div style={{ display: 'flex', gap: '8px', marginTop: '10px' }}>

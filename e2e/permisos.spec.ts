@@ -71,12 +71,16 @@ for (const perfil of Object.keys(MATRIZ) as Perfil[]) {
       }
     });
 
-    test(`la IA Andromeda solo la tiene Diseño`, async ({ page }) => {
+    /**
+     * La IA se retiró del producto: ni el chat Andromeda ni la calificación
+     * automática de piezas. Esta prueba vigilaba que el chat fuera solo de
+     * Diseño; ahora vigila que no esté en ningún perfil, para que no vuelva a
+     * entrar por descuido con la cuenta de OpenAI desconectada.
+     */
+    test(`el chat de IA ya no existe en ningún perfil`, async ({ page }) => {
       test.skip(!sesionDisponible(perfil), `Sin sesión de ${perfil}`);
       await abrirTablero(page);
-      const boton = page.getByRole("button", { name: /Abrir chat IA Andromeda/i });
-      if (perfil === "designer") await expect(boton).toBeVisible();
-      else await expect(boton).toHaveCount(0);
+      await expect(page.getByRole("button", { name: /Abrir chat IA Andromeda/i })).toHaveCount(0);
     });
 
     test(`"Eliminar permanentemente" lo tienen el Trafficker y Diseño (y el Ejecutivo, en lo suyo)`, async ({ page }) => {

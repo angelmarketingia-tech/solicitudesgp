@@ -27,7 +27,7 @@ import { createHmac, timingSafeEqual } from "crypto";
  *                      alcanzan es la eliminación permanente, que sigue siendo
  *                      del Trafficker, y el escritorio personal de cada
  *                      diseñador. Label en UI: "DIRECTIVOS".
- *  - designer        → Diseñador. Centro de Diseño, entregables, IA Andromeda.
+ *  - designer        → Diseñador. Centro de Diseño y entregables.
  */
 export type Role =
   | "admin"
